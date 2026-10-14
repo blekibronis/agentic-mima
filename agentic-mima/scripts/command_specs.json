@@ -1,0 +1,504 @@
+{
+  "_meta": {
+    "source": "MIMA pipeline tutorial (mrcbioinfo.github.io/mima-pipeline), container mima4_v2.0.0",
+    "note": "Only modules listed here may be generated. Verify parameters against 'apptainer run --app MODULE $SANDBOX --help' when a container is available, and update this file if they differ.",
+    "verified": "Verified on Gadi by the project owner with container mima4_v2.0.0_20240409 (code inspection and runs, 2026): RF -i is comma-separated without spaces; mima-visualisation --feature-table is a space-separated list (nargs='+'), accepts _relAbund and _counts, accepts HUMAnN tables headed '# Pathway' or '# Gene' and rejects '# Gene Family'; --read-length needs a matching databaseNmers.kmer_distrib file. Container code and --help read by the project owner on 2026-10-07 (apptainer exec on mima4_v2.0.0_20240409): see the notes of each module."
+  },
+  "modules": {
+    "mima-qc": {
+      "stage": "qc",
+      "requires": [],
+      "summary": "Generate per-sample QC scripts and PBS scripts (repair, dereplicate, fastp, host decontamination).",
+      "style": "options",
+      "invocation": "apptainer run --app mima-qc $SANDBOX",
+      "params": {
+        "-i": {
+          "type": "abs_dir_in",
+          "required": true,
+          "help": "Directory holding the raw FASTQ files named in the manifest"
+        },
+        "-o": {
+          "type": "abs_dir_out",
+          "required": true,
+          "no_subdirs": true,
+          "help": "Output directory; fails if it already contains subdirectories"
+        },
+        "-m": {
+          "type": "abs_file_in",
+          "required": true,
+          "help": "manifest.csv (Sample_ID,FileID_R1,FileID_R2)"
+        },
+        "--num-pbs-jobs": {
+          "type": "int",
+          "min": 1,
+          "default": 4,
+          "help": "Number of PBS scripts to generate"
+        },
+        "--ref": {
+          "type": "abs_file_in",
+          "required": true,
+          "help": "Host reference genome FASTA, e.g. GRCh38_latest_genome.fna"
+        },
+        "--mode": {
+          "type": "choice",
+          "choices": [
+            "container",
+            "single"
+          ],
+          "default": "container",
+          "absent_warning": "--mode omitted: --help in the container says the default is 'container', but the tutorial says 'single'. Do not rely on either: set --mode container explicitly for container runs (it also needs --pbs-config).",
+          "help": "Use container for MIMA container runs"
+        },
+        "--pbs-config": {
+          "type": "abs_file_in",
+          "required_if": {
+            "--mode": "container"
+          },
+          "warn_unless": {
+            "--mode": "container"
+          },
+          "help": "PBS header config file (pbs_header_qc.cfg)"
+        },
+        "-s": {
+          "type": "int",
+          "min": 0,
+          "help": "Maximum number of substitutions allowed between duplicates for clumpify.sh (BBTools). Default not shown by --help."
+        },
+        "-w": {
+          "type": "int",
+          "min": 1,
+          "help": "PBS walltime in hours (--help default 2)."
+        },
+        "-M": {
+          "type": "int",
+          "min": 1,
+          "help": "PBS memory in GB (--help default 64)."
+        },
+        "-t": {
+          "type": "int",
+          "min": 1,
+          "help": "PBS threads (--help default 8)."
+        }
+      },
+      "notes": "Generates one bash script per sample plus PBS scripts; nothing is analysed until the PBS scripts are submitted. Must finish before taxonomy or function profiling. Container code (mima4_v2.0.0): fastp runs with its default settings (no thresholds are passed); host removal is 'minimap2 -c REF R1 R2' with no preset (no -x sr), and reads named in the alignment are removed, so short reads may be matched less sensitively and some host reads can remain. --ref is listed as optional by --help but is required here, because without it no host reads are removed; the file extension is not checked. Samples per job = ceil(samples / --num-pbs-jobs), so fewer PBS scripts than requested can result (9 samples, 4 jobs gives 3 scripts). --help default for --mode is container (the tutorial says single). -w/-M/-t set the walltime (hours), memory (GB) and threads written for the PBS jobs; how they combine with the header in --pbs-config has not been checked, so prefer to set resources in the --pbs-config file and leave these unset."
+    },
+    "mima-qc-report": {
+      "stage": "qc-report",
+      "requires": [
+        "qc"
+      ],
+      "summary": "Summarise QC statistics into QC_report.csv. Run after all QC PBS jobs have finished.",
+      "style": "options",
+      "invocation": "apptainer run --app mima-qc-report $SANDBOX",
+      "cd_to_param": "-i",
+      "params": {
+        "-i": {
+          "type": "abs_dir_in",
+          "required": true,
+          "help": "QC_module directory containing the *_qc_module.log files; the command is run from here"
+        },
+        "--manifest": {
+          "type": "abs_file_in",
+          "required": true,
+          "help": "manifest.csv used for QC"
+        },
+        "-o": {
+          "type": "abs_dir_out",
+          "help": "Output directory for QC_report.csv (default: the input directory)."
+        }
+      },
+      "notes": "Run from inside the QC_module directory (the builder adds the cd). It reads the QCReport folder (fastp JSON) and the PBS log files named *qc_module.oJOBID. Output: QC_report.csv with columns SampleId, log_status, Rawreads_seqs, Derep_seqs, dedup_percentage, Post_QC_seqs, low_quality_reads(%), Host_seqs, Host(%), Clean_reads (container code). dedup_percentage is fastp's own duplication rate parsed from the log, not the share removed by clumpify; low_quality_reads(%) = (Derep_seqs - Post_QC_seqs) / Derep_seqs x 100. Check log_status for missing logs."
+    },
+    "mima-taxa-profiling": {
+      "stage": "taxa",
+      "requires": [
+        "qc"
+      ],
+      "summary": "Generate the Kraken2/Bracken taxonomy profiling PBS script and per-sample scripts.",
+      "style": "options",
+      "invocation": "apptainer run --app mima-taxa-profiling $SANDBOX",
+      "params": {
+        "-i": {
+          "type": "abs_dir_in",
+          "required": true,
+          "help": "CleanReads directory produced by QC"
+        },
+        "-o": {
+          "type": "abs_dir_out",
+          "required": true,
+          "help": "Output directory (Taxonomy_profiling is created inside)"
+        },
+        "--reference-path": {
+          "type": "abs_dir_in",
+          "required": true,
+          "help": "Kraken2 database directory; the Bracken database must be in the same directory",
+          "approved_list": "approved_databases.json"
+        },
+        "--read-length": {
+          "type": "choice",
+          "choices": [
+            "50",
+            "75",
+            "100",
+            "150"
+          ],
+          "default": 150,
+          "help": "Closest to the sequenced read length. The tutorial lists 50, 75, 100, 150, but Bracken also needs databaseNmers.kmer_distrib for that N in the database directory: the shared GTDB database on Gadi has only 50, 100 and 150, and 75 fails. Checked with --check-fs. Estimate it with estimate_read_length.py (nearest available length from the median per-sample mean; ties go lower).",
+          "requires_file_in": {
+            "dir_param": "--reference-path",
+            "pattern": "database{value}mers.kmer_distrib",
+            "glob": "database*mers.kmer_distrib",
+            "extract": "database(\\d+)mers"
+          }
+        },
+        "--threshold": {
+          "type": "int",
+          "min": 0,
+          "default": 1000,
+          "help": "Bracken -t: minimum read count for a species to be kept. Container default 1000; project default 100 (see references/lab-defaults.md). On Gadi (GTDB r95, -r 150, species level) a test sample set kept 4,809 / 1,724 / 627 species at 10 / 100 / 1000. Keep one value for a whole project and state it, with the number of samples dropped, in the report.",
+          "absent_warning": "--threshold: not set, so the container default 1000 applies. The project default is 100 (proposed by the project owner, pending the supervisor's confirmation): set --threshold 100 unless the user chooses another value, and state the value in the plan."
+        },
+        "--mode": {
+          "type": "choice",
+          "choices": [
+            "container",
+            "single"
+          ],
+          "default": "container",
+          "absent_warning": "--mode omitted: --help in the container says the default is 'container', but the tutorial says 'single'. Do not rely on either: set --mode container explicitly for container runs (it also needs --pbs-config).",
+          "help": "Use container for MIMA container runs"
+        },
+        "--pbs-config": {
+          "type": "abs_file_in",
+          "required_if": {
+            "--mode": "container"
+          },
+          "warn_unless": {
+            "--mode": "container"
+          },
+          "help": "PBS header config file (pbs_header_taxa.cfg)"
+        },
+        "--fwd-suffix": {
+          "type": "token",
+          "default": "_clean_1.fq.gz",
+          "help": "Suffix of cleaned forward reads",
+          "silent_default": true
+        },
+        "--rev-suffix": {
+          "type": "token",
+          "default": "_clean_2.fq.gz",
+          "help": "Suffix of cleaned reverse reads",
+          "silent_default": true
+        },
+        "-w": {
+          "type": "int",
+          "min": 1,
+          "help": "PBS walltime in hours (--help default 48)."
+        },
+        "-M": {
+          "type": "int",
+          "min": 1,
+          "help": "PBS memory in GB (--help default 320)."
+        },
+        "-t": {
+          "type": "int",
+          "min": 1,
+          "help": "PBS threads (--help default 28)."
+        },
+        "--taxon-profiler": {
+          "type": "choice",
+          "choices": [
+            "kraken2"
+          ],
+          "default": "kraken2",
+          "silent_default": true,
+          "help": "Only kraken2 is available."
+        },
+        "-f": {
+          "type": "token",
+          "default": "fastq",
+          "silent_default": true,
+          "help": "Input file type (default fastq)."
+        }
+      },
+      "notes": "Kraken2 needs about 300GB memory, so one PBS script runs samples sequentially. Kraken2 and Bracken databases must share one directory. The tutorial example uses --threshold 100 while the default is 1000: always state which value is used. The generator lists the samples in the CleanReads folder once, when it runs: samples added later are ignored until it is run again, and a wrong --fwd-suffix/--rev-suffix exits 0 and writes an empty PBS script with no per-sample .sh files (validate_pbs_scripts.py --check-fs reports this). Verified on Gadi: --read-length maps to Bracken -r and --threshold to Bracken -t. --help defaults: walltime 48 h, memory 320 GB, 28 threads; --threshold default 1000 (taxa below it are removed); --read-length has no stated default (the tutorial says 150). On the Gadi GTDB r95 database only 50, 100 and 150 have k-mer files (75 fails). -w/-M/-t set the walltime (hours), memory (GB) and threads written for the PBS jobs; how they combine with the header in --pbs-config has not been checked, so prefer to set resources in the --pbs-config file and leave these unset."
+    },
+    "mima-bracken-report": {
+      "stage": "taxa-report",
+      "requires": [
+        "taxa"
+      ],
+      "summary": "Summarise Bracken logs into bracken-summary.tsv. Run after the taxonomy PBS job has finished.",
+      "style": "options",
+      "invocation": "apptainer run --app mima-bracken-report $SANDBOX",
+      "params": {
+        "-i": {
+          "type": "abs_dir_in",
+          "required": true,
+          "help": "Taxonomy_profiling directory containing the *_bracken.log files"
+        },
+        "-o": {
+          "type": "abs_file_out",
+          "help": "Optional full path of the output file (default: bracken-summary.tsv beside the input)"
+        }
+      },
+      "notes": "Output: bracken-summary.tsv in the input directory unless -o is given. One row per sample and rank, with columns sampleID, taxon_rank, log_status, threshold, num_taxon, num_tx_above_thres, num_tx_below_thres, total_reads, reads_above_thres, reads_below_thres, reads_distributed, reads_not_distributed, reads_unclassified, logfile, output, all parsed from the Bracken logs. log_status is 'ok-...' for a good row, or 'no reads found' / 'exit error'. Only samples that appear in the logs get a row; exits 1 if no *_bracken.log files are found."
+    },
+    "bracken-feature-tables": {
+      "stage": "taxa-tables",
+      "requires": [
+        "taxa"
+      ],
+      "summary": "Merge per-sample Bracken output into feature tables, one per rank. Run after the taxonomy PBS job has finished.",
+      "style": "template",
+      "template": "cd {featuretables_dir} && apptainer exec $SANDBOX python3 generate_bracken_feature_table.py",
+      "params": {
+        "featuretables_dir": {
+          "type": "abs_dir_in",
+          "required": true,
+          "help": "Taxonomy_profiling/featureTables directory"
+        }
+      },
+      "notes": "Runs the generated Python script directly (not a PBS job). The script takes no arguments and reads the relative path ../bracken/*_RANK, so it must be run from inside the featureTables directory. It loops over species, genus, family, order, class and phylum and writes bracken_FT_RANK plus _counts (Bracken _num columns) and _relAbund (Bracken _frac columns, split out unchanged). Bracken defines the fraction over the reads kept at that rank after the threshold, so shares are relative to the retained taxa, not all reads. Run it only after every sample has finished: samples still running are silently left out."
+    },
+    "mima-function-profiling": {
+      "stage": "func",
+      "requires": [
+        "qc"
+      ],
+      "summary": "Generate per-sample HUMAnN3 PBS scripts.",
+      "style": "options",
+      "invocation": "apptainer run --app mima-function-profiling $SANDBOX",
+      "params": {
+        "-i": {
+          "type": "abs_dir_in",
+          "required": true,
+          "help": "CleanReads directory produced by QC"
+        },
+        "-o": {
+          "type": "abs_dir_out",
+          "required": true,
+          "help": "Output directory (Function_profiling is created inside)"
+        },
+        "--nucleotide-database": {
+          "type": "abs_dir_in",
+          "required": true,
+          "help": "HUMAnN chocophlan directory"
+        },
+        "--protein-database": {
+          "type": "abs_dir_in",
+          "required": true,
+          "help": "HUMAnN uniref directory"
+        },
+        "--utility-database": {
+          "type": "abs_dir_in",
+          "required": true,
+          "help": "HUMAnN utility_mapping directory"
+        },
+        "--metaphlan-options": {
+          "type": "metaphlan_options",
+          "required": true,
+          "multi_value_as_one_string": true,
+          "help": "String such as '++bowtie2db /abs/path/metaphlan_databases'; MetaPhlAn options use ++ prefixes. The container's --help shows a list (nargs='+'); the tutorial passes one quoted string and the builder does the same. That the container accepts the single-string form rests on the tutorial run, not on code inspection."
+        },
+        "--mode": {
+          "type": "choice",
+          "choices": [
+            "container",
+            "single"
+          ],
+          "default": "container",
+          "absent_warning": "--mode omitted: --help in the container says the default is 'container', but the tutorial says 'single'. Do not rely on either: set --mode container explicitly for container runs (it also needs --pbs-config).",
+          "help": "Use container for MIMA container runs"
+        },
+        "--pbs-config": {
+          "type": "abs_file_in",
+          "required_if": {
+            "--mode": "container"
+          },
+          "warn_unless": {
+            "--mode": "container"
+          },
+          "help": "PBS header config file (pbs_header_func.cfg)"
+        },
+        "--mpa3": {
+          "type": "flag",
+          "help": "Use the MetaPhlAn 3 algorithm, for backward compatibility with MetaPhlAn 3 databases (--help). The container has MetaPhlAn 4.1.0; which of the default database or an older one plus --mpa3 and ++index runs correctly in HUMAnN 3.8 has not been tested."
+        },
+        "-w": {
+          "type": "int",
+          "min": 1,
+          "help": "PBS walltime in hours (--help default 24)."
+        },
+        "-M": {
+          "type": "int",
+          "min": 1,
+          "help": "PBS memory in GB (--help default 64)."
+        },
+        "-t": {
+          "type": "int",
+          "min": 1,
+          "help": "PBS threads (--help default 28)."
+        },
+        "--function-profiler": {
+          "type": "choice",
+          "choices": [
+            "humann3",
+            "humann2"
+          ],
+          "default": "humann3",
+          "silent_default": true,
+          "help": "Function profiler (default humann3)."
+        },
+        "--fwd-suffix": {
+          "type": "token",
+          "default": "_clean_1.fq.gz",
+          "silent_default": true,
+          "help": "Suffix of cleaned forward reads."
+        },
+        "--rev-suffix": {
+          "type": "token",
+          "default": "_clean_2.fq.gz",
+          "silent_default": true,
+          "help": "Suffix of cleaned reverse reads."
+        },
+        "--pipeline-dir": {
+          "type": "abs_dir_in",
+          "help": "Directory of the pipeline scripts, used to find combine_fastq.jl."
+        }
+      },
+      "notes": "Generates one PBS script per sample (HUMAnN3; the tutorial example asks for 8 CPUs, 64 GB and 8 h, --help defaults are 24 h, 64 GB, 28 threads). Forward and reverse reads are concatenated into SAMPLE_combine.fq.gz first, so HUMAnN sees them as one set of reads. The container has MetaPhlAn 4.1.0 (default database vJun23); the tutorial example uses vJan21 with ++index, and --mpa3 exists for MetaPhlAn 3 databases. The feature-table step (generate_func_feature_tables.pbs/.sh, written by func_profiling.py) is a PBS job for the later submission phase; it regroups the cpm gene-family table to KOs with humann_regroup_table -g uniref90_rxn -c UTILITY/map_ko_uniref90.txt.gz, and the 'cmp' in some output names is a spelling slip for cpm. Whether -c overrides -g is untested: check that KO rows start with K numbers. -w/-M/-t set the walltime (hours), memory (GB) and threads written for the PBS jobs; how they combine with the header in --pbs-config has not been checked, so prefer to set resources in the --pbs-config file and leave these unset."
+    },
+    "mima-vis-taxa": {
+      "stage": "vis-barplot",
+      "requires": [
+        "taxa-tables"
+      ],
+      "summary": "Taxonomy stacked bar plots by group. Arguments are positional and order matters.",
+      "style": "positional",
+      "invocation": "apptainer run --app mima-vis-taxa $SANDBOX",
+      "params": {
+        "feature_table": {
+          "type": "abs_file_in",
+          "required": true,
+          "help": "Relative abundance feature table (bracken_FT_RANK_relAbund)"
+        },
+        "metadata": {
+          "type": "abs_file_in",
+          "required": true,
+          "help": "Tab-separated study metadata"
+        },
+        "group_spec": {
+          "type": "group_spec",
+          "required": true,
+          "help": "column:group1:group2[:...] (case-sensitive)"
+        },
+        "output_dir": {
+          "type": "abs_dir_out",
+          "required": true,
+          "help": "Output directory"
+        },
+        "prefix": {
+          "type": "name",
+          "required": true,
+          "help": "Prefix for output files"
+        },
+        "top_n": {
+          "type": "int",
+          "min": 1,
+          "required": true,
+          "help": "Number of top taxa to colour; the rest become Other"
+        },
+        "figure_width": {
+          "type": "number",
+          "required": true,
+          "help": "Figure width in inches"
+        },
+        "figure_height": {
+          "type": "number",
+          "required": true,
+          "help": "Figure height in inches"
+        }
+      },
+      "notes": "All arguments are positional and exactly eight are required (the script stops with a usage message otherwise). Use the _relAbund table. Group values are case-sensitive and must match the metadata. Only samples in the listed groups are selected (outputs are named PREFIX.select.*); output file names contain the top_N value given, and the remaining taxa are pooled as 'Others'."
+    },
+    "mima-visualisation": {
+      "stage": "diversity",
+      "requires": [
+        "taxa-tables"
+      ],
+      "summary": "Alpha diversity, beta diversity (PERMANOVA) and differential abundance between groups.",
+      "style": "options",
+      "invocation": "apptainer run --app mima-visualisation $SANDBOX",
+      "params": {
+        "--feature-table": {
+          "type": "abs_file_multi",
+          "required": true,
+          "help": "One or more feature tables, space-separated on the command line: Bracken _relAbund or _counts tables (both accepted; the tutorial uses _relAbund) and/or HUMAnN pathway or gene tables. Header of the first cell must be one of '# Taxonomy', 'name', '# Pathway', '# Gene'; '# Gene Family' is rejected.",
+          "preferred_suffix": {
+            "applies_to_prefix": "bracken_FT_",
+            "suffix": "_relAbund"
+          }
+        },
+        "--metadata": {
+          "type": "abs_file_in",
+          "required": true,
+          "help": "Tab-separated study metadata"
+        },
+        "--study-groups": {
+          "type": "csv_names",
+          "required": true,
+          "help": "Comma-separated metadata columns; each needs 2 or more levels"
+        },
+        "--output-dir": {
+          "type": "abs_dir_out",
+          "required": true,
+          "help": "Output directory"
+        },
+        "--plot-insignificant": {
+          "type": "flag",
+          "help": "Also plot comparisons that are not significant (skipped by default)."
+        },
+        "--ini-file": {
+          "type": "abs_file_in",
+          "help": "Configuration file for figure parameters such as size (default figures.ini)."
+        }
+      },
+      "notes": "Runs alpha diversity, beta diversity (PERMANOVA) and differential abundance for every column in --study-groups. Verified on Gadi (container mima4_v2.0.0): --feature-table is a space-separated list (nargs='+'); both _relAbund and _counts are accepted (relative abundance tables are multiplied by 1e6 to pseudo-counts for alpha diversity; counts are converted to relative abundance for beta diversity and differential abundance); the table reader (models.py) accepts first header cells '# Taxonomy', 'name', '# Pathway' and '# Gene' and REJECTS '# Gene Family' (ValueError: Could not detect data matrix format), so a gene-family table needs a copy with '# Gene' as its first header cell (untested whether it then runs). --study-groups columns must be categorical with at least 2 levels: a numeric column such as Age fails at the CCA/RDA step. Alpha diversity: Wilcoxon (2 groups) or Kruskal-Wallis with Dunn post-hoc (3 or more), Benjamini-Hochberg/FDR adjusted. Beta diversity: Bray-Curtis on square-root relative abundances only, PERMANOVA (adonis2, 999 permutations), no dispersion test and no strata, so paired or longitudinal designs are not supported. KNOWN ISSUE (error observed by the project owner; cause unconfirmed): the project owner's reading of the code is that alpha-diversity.R line 21 calls alphaDiversity(otutab = t(microbial_variables), siteInCol = TRUE, taxhead = \"taxonomy\") and the run stops with 'Input data must be a numeric vector or matrix' in calc_shannon after beta diversity has finished; the otuSummary documentation says taxhead names a taxonomy column if the table has one, which fits that reading but does not prove it. No fix has been applied or tested by this skill. Pass taxonomic and functional tables together only if the user wants them analysed in one run. Further container findings (code and --help): --metadata may be tab- or comma-separated; --help lists the accepted first-column headers as empty, ID, '# Pathway', '# Gene' and '# IGGsearch species table'; there is no code for UNMAPPED, UNGROUPED, UNINTEGRATED or stratified (|) rows, so they are analysed as ordinary features unless removed first; for pairwise Wilcoxon tests the reference group is the one whose name contains Control, control or CTRL if exactly one matches (variance-stats.R carries a TODO that this may not hold), so name groups accordingly or check effect directions. Not verified here: whether a group named otherwise changes effect direction.",
+      "known_issue": "On container mima4_v2.0.0 (Gadi) the alpha-diversity step stopped with 'Input data must be a numeric vector or matrix' after beta diversity finished (reported by the project owner; cause unconfirmed, see references/troubleshooting.md). Tell the user alpha diversity may be unavailable, and report alpha results only if alpha_diversity_raw_data.txt exists."
+    },
+    "mima-classifier-RF": {
+      "stage": "classifier",
+      "requires": [],
+      "summary": "Random Forest classification with 3- to 10-fold cross-validation.",
+      "style": "options",
+      "invocation": "apptainer run --app mima-classifier-RF $SANDBOX",
+      "pre_commands": [
+        "mkdir -p {-o}"
+      ],
+      "params": {
+        "-i": {
+          "type": "abs_file_list",
+          "required": true,
+          "help": "One or more feature tables, comma-separated with no spaces"
+        },
+        "-m": {
+          "type": "abs_file_in",
+          "required": true,
+          "help": "Tab-separated metadata"
+        },
+        "-c": {
+          "type": "name",
+          "required": true,
+          "help": "Metadata column holding the mutually exclusive class labels"
+        },
+        "-o": {
+          "type": "abs_dir_out",
+          "required": true,
+          "help": "Output directory (created beforehand with mkdir -p)"
+        }
+      },
+      "notes": "Creates 3- to 10-fold CV results per input table plus a combined data_all model. Container code (classifier_pipeline.R): -i is a comma-separated list with no spaces, each file tab separated with the feature name in column 1 and samples in the other columns; all-zero features are dropped. Only randomForest (mlr) is run with default settings and no tuning; seed 101 is fixed before the folds; folds are created by caret::createFolds on sample names, so they are random, not stratified by group; each K runs once; one AUC with a bootstrapped 95% CI is computed from the pooled out-of-fold predictions, using the second probability column, so the module is built for two groups. -c is matched to the metadata header by pattern (grep), so a column name that is part of another header (Gender vs Gender_2) selects several columns and breaks the run. Feature-importance files (feature_importance_TABLE_classif.randomForest.txt) are written if the model returns importances; not verified in a run. Class labels must be mutually exclusive."
+    }
+  }
+}

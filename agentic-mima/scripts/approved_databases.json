@@ -1,0 +1,20 @@
+{
+  "_meta": {
+    "purpose": "Reference databases the project has approved for mima-taxa-profiling. build_command.py warns when --reference-path is not listed.",
+    "status": "Proposed by the project owner (Rafael); pending confirmation by the supervisor, Dr Jiang.",
+    "how_to_add": "Add an object to 'databases' with the directory, release, scope and the read lengths that have databaseNmers.kmer_distrib files. Only add a database after the lab approves it."
+  },
+  "databases": [
+    {
+      "path": "/g/data/mp96/REFDB/GTDB_Kraken",
+      "name": "GTDB release 95, Kraken2 and Bracken",
+      "scope": "Bacteria and archaea in gut and stool metagenomes",
+      "read_lengths": [50, 100, 150],
+      "notes": "Dated 2020: newer species may be missing. GTDB names and ranks differ from NCBI taxonomy. No eukaryotes or viruses."
+    }
+  ],
+  "needs_approval": {
+    "fungi_and_protozoa": "An NCBI PlusPF-type database (standard plus protozoa and fungi) would be needed; not on the approved list.",
+    "viruses": "Kraken2 virome calls from gut shotgun data are weak: needs a dedicated approach, not an approved database."
+  }
+}

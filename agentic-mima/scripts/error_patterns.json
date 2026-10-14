@@ -1,0 +1,240 @@
+{
+  "_meta": {
+    "purpose": "Log signatures used by scan_logs.py. Each entry maps a regex to a cause and a fix.",
+    "how_to_add": "Add an object to 'patterns' with a unique id, a regex that matches one log line, severity (error or warning), cause and fix, and verified false. To mark it verified, add an 'evidence' object with 'source' (who saw it, where, when) and 'observed_line' (the real line), then run the tests.",
+    "confidence": "How distinctive the regex is, i.e. the risk of matching unrelated lines (high = low risk). It says nothing about whether the pattern was checked against a real log; that is the 'verified' field.",
+    "provenance": "The MIMA tutorial contains no tool error messages. Patterns marked verified were seen in real runs on Gadi (see each 'evidence'). The rest come from general knowledge of how PBS, Apptainer, Kraken2, Bracken, fastp and R report failures and have not been checked against a real MIMA log.",
+    "verified": "true only when a real MIMA or PBS log line showing the problem has been seen. A verified pattern must carry 'evidence' (source and observed_line) and its regex must match that line; the tests enforce both. Unverified patterns have no evidence field. scan_logs.py labels every unverified finding."
+  },
+  "patterns": [
+    {
+      "id": "pbs-walltime",
+      "regex": "PBS: job killed: walltime \\d+ exceeded limit \\d+",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "The job ran past its requested walltime and PBS killed it.",
+      "fix": "Increase the walltime in the stage's pbs_header config, regenerate the scripts, and resubmit only the failed jobs. Check check_job_status.py for how long it actually ran.",
+      "verified": false
+    },
+    {
+      "id": "pbs-memory",
+      "regex": "PBS: job killed: (mem|vmem) \\S+ exceeded limit",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "The job used more memory than requested and PBS killed it.",
+      "fix": "Increase mem in the stage's pbs_header config (Kraken2 needs about 300GB), regenerate the scripts, and resubmit the failed jobs.",
+      "verified": false
+    },
+    {
+      "id": "pbs-ncpus",
+      "regex": "PBS: job killed: ncpus \\S+ exceeded limit",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "The job used more CPUs than requested.",
+      "fix": "Raise ncpus in the pbs_header config or lower the thread count of the tool, then regenerate and resubmit.",
+      "verified": false
+    },
+    {
+      "id": "out-of-memory",
+      "regex": "(std::bad_alloc|Cannot allocate memory|MemoryError|oom-kill|Out of memory)",
+      "severity": "error",
+      "confidence": "medium",
+      "cause": "A tool ran out of memory (the scheduler may not have printed a kill message).",
+      "fix": "Increase mem in the pbs_header config and rerun the failed samples.",
+      "verified": false
+    },
+    {
+      "id": "disk-full",
+      "regex": "(Disk quota exceeded|No space left on device)",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "The output or temporary filesystem is full or over quota.",
+      "fix": "Free space or choose an output directory with more room. Outputs of the failed jobs may be incomplete: delete and regenerate them.",
+      "verified": false
+    },
+    {
+      "id": "apptainer-bind-missing",
+      "regex": "(container creation failed|mount source .* (doesn't|does not) exist|while mounting .*: mount)",
+      "severity": "error",
+      "confidence": "medium",
+      "cause": "A path listed in APPTAINER_BIND does not exist, or a path the job needs is not bound into the container.",
+      "fix": "Check every source path in APPTAINER_BIND in the pbs_header config exists on the compute node, include the directories holding reads, references and outputs, then regenerate the scripts.",
+      "verified": false
+    },
+    {
+      "id": "apptainer-image",
+      "regex": "(FATAL:\\s+could not open image|FATAL:\\s+image not found|failed to (open|resolve) image)",
+      "severity": "error",
+      "confidence": "medium",
+      "cause": "IMAGE_DIR does not point to a valid MIMA sandbox or image.",
+      "fix": "Set IMAGE_DIR in the pbs_header config to the built sandbox directory and regenerate.",
+      "verified": false
+    },
+    {
+      "id": "command-not-found",
+      "regex": "(apptainer|singularity|qsub|kraken2|bracken|humann|fastp|minimap2): command not found",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "The executable is not on PATH on the compute node. Apptainer is often provided by an environment module.",
+      "fix": "Add the site's module load line (for example for Apptainer) to the pbs_header config and regenerate. Tools other than apptainer must be run through the container.",
+      "verified": false
+    },
+    {
+      "id": "crlf-script",
+      "regex": "\\$'\\\\r': command not found|\\r: (No such file|command not found)",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "A script or config has Windows (CRLF) line endings.",
+      "fix": "Run sed -i 's/\\r$//' on the file (and on the pbs_header config and manifest), regenerate if needed, then resubmit.",
+      "verified": false
+    },
+    {
+      "id": "truncated-fastq",
+      "regex": "(unexpected end of file|not in gzip format|invalid compressed data|crc error)",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "A compressed FASTQ file is truncated or corrupt.",
+      "fix": "Identify the sample from the log, re-transfer or re-download its FASTQ files, verify with gzip -t, remove that sample's partial outputs and rerun it.",
+      "verified": false
+    },
+    {
+      "id": "fastp-open-fail",
+      "regex": "ERROR: Failed to open file",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "fastp could not open an input file: wrong name in the manifest, or the directory is not bound into the container.",
+      "fix": "Check the manifest file names against the reads directory and the APPTAINER_BIND paths, then rerun QC.",
+      "verified": false
+    },
+    {
+      "id": "kraken-db",
+      "regex": "database .* does not contain necessary file",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "The Kraken2 database path is wrong or the database build is incomplete.",
+      "fix": "Confirm --reference-path holds hash.k2d, opts.k2d and taxo.k2d and that the directory is bound into the container.",
+      "verified": false
+    },
+    {
+      "id": "bracken-kmer",
+      "regex": "kmer_distrib.*(not exist|does not exist|not found|No such file)|(not exist|does not exist|not found|No such file).*kmer_distrib",
+      "severity": "error",
+      "confidence": "medium",
+      "cause": "The Bracken database file for the chosen read length is missing, so --read-length does not match what was built.",
+      "fix": "List the databaseNNNmers.kmer_distrib files in the reference directory and use a matching --read-length (50, 75, 100 or 150), then regenerate the taxonomy scripts.",
+      "verified": false
+    },
+    {
+      "id": "bracken-input-missing",
+      "regex": ">> ERROR: Input file .* does not exist",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "Bracken stopped at start-up because the Kraken2 report it was given does not exist at that path, so it wrote nothing. Why the report is missing is a separate question: Kraken2 may have failed, or it may have written its report somewhere else.",
+      "fix": "Check whether the file named in the message exists. If not, read the Kraken2 step in the sample script (its --report path) and Kraken2's own output for that sample before changing anything in the Bracken step. Do not change --read-length or --threshold for this error.",
+      "verified": true,
+      "supersedes": [
+        "file-not-found"
+      ],
+      "evidence": {
+        "source": "Rafael (project owner), Gadi, container mima4_v2.0.0_20240409, 2026-10-14: bracken run by hand inside the container for sample SRR17380115 of the tutorial run",
+        "observed_line": ">> ERROR: Input file /scratch/<project>/<user>/mima_tutorial/output/Taxonomy_profiling/kraken2/SRR17380115.kraken2.report does not exist",
+        "note": "Seen in an interactive run on 2026-10-14, not in a PBS log, and after the tutorial outputs had been cleared (kraken2/ empty, modified 2026-08-02 14:28, after the 2026-08-01 job). It shows what Bracken prints when the report is absent. It does not explain why the 2026-08-01 job's Bracken step failed."
+      }
+    },
+    {
+      "id": "bracken-outputs-not-moved",
+      "regex": "mv: cannot stat .*kraken2_bracken_.*\\.report",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "The taxonomy script ended by moving Bracken's reports and found none, so Bracken produced nothing for that sample. This is a follow-on symptom, not the cause. Bracken's own messages go to SAMPLE_bracken.log in the taxonomy directory (the generated script redirects them there), not to the PBS log.",
+      "fix": "Open SAMPLE_bracken.log for the first sample named here and read its first error. If that file does not exist, Bracken may not have started: check the Kraken2 output for the same sample. Then scan that log with scan_logs.py.",
+      "verified": true,
+      "supersedes": [
+        "file-not-found"
+      ],
+      "evidence": {
+        "source": "Rafael (project owner), Gadi, tutorial run, PBS log mima-taxa.o175269652 line 68, seen 2026-10-14",
+        "observed_line": "mv: cannot stat '/scratch/<project>/<user>/mima_tutorial/output/Taxonomy_profiling/kraken2/SRR17380115.kraken2_bracken_*.report': No such file or directory",
+        "note": "The same line appears for all nine samples in job 175269652 (Exit Status 1). Bracken's own error for that job is unknown: the SAMPLE_bracken.log files no longer exist."
+      }
+    },
+    {
+      "id": "file-not-found",
+      "regex": "No such file or directory",
+      "severity": "warning",
+      "confidence": "medium",
+      "cause": "A file or directory the script needs is missing or not bound into the container.",
+      "fix": "Identify the path in the log line, check it exists and is covered by APPTAINER_BIND. Many other errors are follow-on effects of this one.",
+      "verified": false
+    },
+    {
+      "id": "permission-denied",
+      "regex": "Permission denied",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "The job cannot read an input or write an output location.",
+      "fix": "Check ownership and permissions of the reads, the reference databases and the output directory.",
+      "verified": false
+    },
+    {
+      "id": "r-error",
+      "regex": "^(Error in |Execution halted)",
+      "severity": "error",
+      "confidence": "medium",
+      "cause": "An R step in the analysis modules failed.",
+      "fix": "Read the lines around the message in the log. Usual causes are a group column or level that does not match the metadata, sample IDs that do not match the feature table, or a group with fewer than 2 levels. Rerun validate_metadata.py.",
+      "verified": false
+    },
+    {
+      "id": "python-traceback",
+      "regex": "Traceback \\(most recent call last\\)",
+      "severity": "error",
+      "confidence": "medium",
+      "cause": "A Python step failed.",
+      "fix": "Read the last lines of the traceback for the exception type and the file it names, then match it to a cause (missing input, wrong table format, bad parameter).",
+      "verified": false
+    },
+    {
+      "id": "calc-shannon-input",
+      "regex": "Input data must be a numeric vector or matrix",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "mima-visualisation stopped in alpha diversity (calc_shannon) after beta diversity finished; both _relAbund and _counts tables fail. The error was observed in a real run. The cause is unconfirmed: the project owner's reading is that alpha-diversity.R line 21 passes siteInCol = TRUE and taxhead = \"taxonomy\" to otuSummary::alphaDiversity although the table has no taxonomy column, so the numeric matrix is read as character. The otuSummary documentation (taxhead names a taxonomy column if the table has one) fits this but does not prove it. It may also depend on the input or the container version.",
+      "fix": "Do not retry with the other table. Tell the user alpha diversity did not complete, and report only the outputs that exist. To confirm the cause, follow the checks in references/troubleshooting.md. The project owner's proposed change (a purely numeric matrix with siteInCol = FALSE and taxhead = NULL) ran cleanly for them but has not been tested by this skill. Beta diversity and differential abundance outputs from the same run can still be used if they exist.",
+      "verified": true,
+      "evidence": {
+        "source": "Rafael (project owner), Gadi, container mima4_v2.0.0_20240409, 2026",
+        "observed_line": "  Input data must be a numeric vector or matrix.",
+        "context": "Error in calc_shannon(data = x, base = exp(1)) :",
+        "note": "Reported by the project owner from a run on Gadi; the log itself was not seen by the skill's author."
+      }
+    },
+    {
+      "id": "humann-header-unrecognised",
+      "regex": "Could not detect data matrix format",
+      "severity": "error",
+      "confidence": "high",
+      "cause": "The container's table reader (models.py) did not recognise the first header cell. It accepts '# Taxonomy', 'name', '# Pathway' and '# Gene' and rejects '# Gene Family', which is what standard HUMAnN gene-family tables start with.",
+      "fix": "Make a copy of the table whose first header cell is '# Gene' (never edit the original in place; see references/troubleshooting.md) and pass the copy. Untested whether the copy then runs to the end.",
+      "verified": true,
+      "evidence": {
+        "source": "Rafael (project owner), Gadi, container mima4_v2.0.0_20240409, 2026",
+        "observed_line": "ValueError: Could not detect data matrix format"
+      }
+    },
+    {
+      "id": "file-not-found-errno2",
+      "regex": "\\[Errno 2\\]",
+      "severity": "error",
+      "confidence": "low",
+      "cause": "Python could not find a file. With mima-visualisation this was seen when --feature-table was given as one comma-separated string: the module expects separate arguments separated by spaces. A wrong path or a file on a filesystem that is not bound into the container gives the same message.",
+      "fix": "Read the file name in the message. If it contains commas, pass the tables as a space-separated list. Otherwise check the path and the APPTAINER_BIND in the PBS config.",
+      "verified": true,
+      "evidence": {
+        "source": "Rafael (project owner), Gadi, container mima4_v2.0.0_20240409, 2026",
+        "observed_line": "[Errno 2] No such file or directory: 'a,b'",
+        "note": "Only '[Errno 2]' was reported; the rest of the line is Python's standard message and the file name is illustrative."
+      }
+    }
+  ]
+}
