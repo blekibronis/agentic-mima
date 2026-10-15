@@ -1,0 +1,303 @@
+---------------- APP: mima-qc ----------------
+usage: qc_module.py -i INPUT_DIR -o OUTPUT_DIR -m MANIFEST [-s SUBS] [-r REF] [--mode {single,container}] [-w WALLTIME] [-M MEM] [-t THREADS] [-e EMAIL] [--pbs-config PBS_CONFIG] [--num-pbs-jobs NUM_PBS_JOBS]
+                    [-h] [--verbose] [--debug]
+
+Quality checking module part of the MRC Metagenomics pipeline
+
+[1] Required arguments:
+  -i INPUT_DIR, --input-dir INPUT_DIR
+                        path to input directory of raw sequences (e.g., fastQ)
+  -o OUTPUT_DIR, --output-dir OUTPUT_DIR
+                        path to output directory
+  -m MANIFEST, --manifest MANIFEST
+                        path to manifest file in .csv format. The header line is case sensitive, and must follow the following format with no spaces between commas. Sample_ID,FileID_R1,FileID_R2
+
+[2] QC settings:
+  -s SUBS, --subs SUBS  Maximum number of substitutions allowed between duplicates used for clumpify.sh from BBTools
+  -r REF, --ref REF     file path to reference host genome
+
+[3] PBS settings:
+  --mode {single,container}
+                        Mode to generate PBS scripts, currently supports single sample mode only [default=container]
+  -w WALLTIME, --walltime WALLTIME
+                        walltime hours required for PBS job of MODE [default=2]
+  -M MEM, --mem MEM     memory (GB) required for PBS job of MODE [default=64]
+  -t THREADS, --threads THREADS
+                        number of threads for PBS job of MODE [default=8]
+  -e EMAIL, --email EMAIL
+                        PBS setting - email address
+  --pbs-config PBS_CONFIG
+                        Must be set when --mode 'container'. Path to PBS configuration file which must includ PBS headers and any other required settings to run the Container image. Contents in the config
+                        file will be included at the top of all generated PBS scripts [default=None]
+  --num-pbs-jobs NUM_PBS_JOBS
+                        Number of PBS jobs where the number of samples processed will be equally distributed amongst the number of jobs [default=4]
+
+[4] Optional arguments:
+  -h, --help            show this help message and exit
+  --verbose             turn on will return verbose meessages
+  --debug               turn on will return debugging messages
+
+---------------- APP: mima-qc-report ----------------
+usage: qc_report.py -i INPUT_DIR -m MANIFEST [-o OUTPUT_DIR] [-h] [--verbose] [--debug]
+
+Generates QC report of your sequences
+
+[1] Required arguments:
+  -i INPUT_DIR, --input-dir INPUT_DIR
+                        path to directory which consists the QCReport folder from qc_module.py script. The QCReport folder contains the JSON report from FastP. This script assumes that the PBS log files are
+                        in this directory. It will search for PBS log files with the suffix 'qc_module.oXXX' where XXX is the PBS job ID.
+  -m MANIFEST, --manifest MANIFEST
+                        path to manifest file in .csv format. The header line is case sensitive, and must follow the following format with no spaces between commas. Sample_ID,FileID_R1,FileID_R2
+
+[2] Optional arguments:
+  -o OUTPUT_DIR, --output-dir OUTPUT_DIR
+                        path to output directory, default will be the same as input directory
+  -h, --help            show this message and exit
+  --verbose             turn on will return verbose message
+  --debug               turn on will return debugging messages
+
+---------------- APP: mima-taxa-profiling ----------------
+usage: taxa_module.py -i INPUT_DIR -o OUTPUT_DIR [--taxon-profiler {kraken2}] [--fwd-suffix FWD_SUFFIX] [--rev-suffix REV_SUFFIX] --reference-path REFERENCE_PATH [--read-length READ_LENGTH]
+                      [--threshold THRESHOLD] [--mode {single,container}] [-w WALLTIME] [-M MEM] [-t THREADS] [-e EMAIL] [--pbs-config PBS_CONFIG] [-h] [-f FILE_TYPE] [--verbose] [--debug]
+
+Taxonomy profiling module part of the MRC Metagenomics pipeline
+
+[1] Required arguments:
+  -i INPUT_DIR, --input-dir INPUT_DIR
+                        path to input directory of cleaned sequences (e.g. QC_module/CleanReads)
+  -o OUTPUT_DIR, --output-dir OUTPUT_DIR
+                        path to output directory
+  --reference-path REFERENCE_PATH
+                        specify the path to the reference required for the selected taxonomic profiler
+  --read-length READ_LENGTH
+                        read length for Bracken estimation of abundances
+  --threshold THRESHOLD
+                        threshold [default=1000] for Bracken estimation of abundances, species with reads below threshold are removed
+
+[2] Taxonomy profile settings:
+  --taxon-profiler {kraken2}
+                        select which taxonomy profiler to use, default [default=kraken2]
+  --fwd-suffix FWD_SUFFIX
+                        suffix of forward cleaned reads to search for in input_dir [default=_clean_1.fq.gz]
+  --rev-suffix REV_SUFFIX
+                        suffix of reverse cleaned reads for PBS script [default=_clean_2.fq.gz]
+
+[3] PBS settings:
+  --mode {single,container}
+                        Mode to generate PBS scripts, currently supports single sample mode only [default=container]
+  -w WALLTIME, --walltime WALLTIME
+                        walltime hours required for PBS job of MODE [default=48]
+  -M MEM, --mem MEM     memory (GB) required for PBS job of MODE [default=320]
+  -t THREADS, --threads THREADS
+                        number of threads for PBS job of MODE [default=28]
+  -e EMAIL, --email EMAIL
+                        PBS setting - email address
+  --pbs-config PBS_CONFIG
+                        Must be set when --mode 'container'. Path to PBS configuration file which must includ PBS headers and any other required settings to run the Container image. Contents in the config
+                        file will be included at the top of all generated PBS scripts [default=None]
+
+[4] Optional arguments:
+  -h, --help            show this help message and exit
+  -f FILE_TYPE, --file-type FILE_TYPE
+                        input file type: [default=fastq]
+  --verbose             turn on will return verbose messages
+  --debug               turn on will return debugging message
+
+---------------- APP: mima-bracken-report ----------------
+usage: generate_bracken_report.py -i INPUT_DIR [-o OUTPUT_FILE] [-h] [--verbose] [--debug]
+
+Generates QC report of your sequences
+
+[1] Required arguments:
+  -i INPUT_DIR, --input-dir INPUT_DIR
+                        path to directory which consists the Bracken log files after estimating the taxonomy abundances.
+
+[2] Optional arguments:
+  -o OUTPUT_FILE, --output-file OUTPUT_FILE
+                        path to output file. Default is output saved in the same directory as input directory.
+  -h, --help            show this message and exit
+  --verbose             turn on will return verbose message
+  --debug               turn on will return debugging messages
+
+---------------- APP: mima-function-profiling ----------------
+usage: func_profiling.py -i INPUT_DIR -o OUTPUT_DIR [--function-profiler {humann3,humann2}] [--fwd-suffix FWD_SUFFIX] [--rev-suffix REV_SUFFIX] [--nucleotide-database NUCLEOTIDE_DATABASE]
+                         [--protein-database PROTEIN_DATABASE] [--utility-database UTILITY_DATABASE] [--metaphlan-options METAPHLAN_OPTIONS [METAPHLAN_OPTIONS ...]] [--mpa3] [--mode {single,container}]
+                         [-w WALLTIME] [-M MEM] [-t THREADS] [-e EMAIL] [--pbs-config PBS_CONFIG] [-h] [--pipeline-dir PIPELINE_DIR] [--verbose] [--debug]
+
+Function profiling module part of the MRC Metagenomics pipeline
+
+[1] Required arguments:
+  -i INPUT_DIR, --input-dir INPUT_DIR
+                        path to input directory of cleaned sequences (e.g. QC_module/CleanReads)
+  -o OUTPUT_DIR, --output-dir OUTPUT_DIR
+                        path to output directory
+
+[2] Function profile settings:
+  --function-profiler {humann3,humann2}
+                        select profiler for function profiling [default=humann3]
+  --fwd-suffix FWD_SUFFIX
+                        suffix of cleaned reads to search for in input_dir [default=_clean_1.fq.gz]
+  --rev-suffix REV_SUFFIX
+                        suffix of reverse cleaned reads for PBS script [default=_clean_2.fq.gz]
+  --nucleotide-database NUCLEOTIDE_DATABASE
+                        HUMAnN3 directory containing the nucleotide database [default=/refdb/humann/data/chocophlan]
+  --protein-database PROTEIN_DATABASE
+                        HUMAnN3 directory containing the protein database [default=/refdb/humann/data/uniref]
+  --utility-database UTILITY_DATABASE
+                        HUMAnN3 utility mapping file [default=/refdb/humann/data/utility_mapping]
+  --metaphlan-options METAPHLAN_OPTIONS [METAPHLAN_OPTIONS ...]
+                        parameter options for Metaphlan (e.g., --bowtie2db reference path). Use '++' instead of '--' for arguments. [default=--bowtie2db /refdb/humann/metaphlan_databases]
+  --mpa3                use Metaphlan 3 algorithm, used for backward compatibility with Metaphlan 3 databases
+
+[3] PBS settings:
+  --mode {single,container}
+                        Mode to generate PBS scripts, currently supports single sample mode only [default=container]
+  -w WALLTIME, --walltime WALLTIME
+                        walltime hours required for PBS job of MODE [default=24]
+  -M MEM, --mem MEM     memory (GB) required for PBS job of MODE [default=64]
+  -t THREADS, --threads THREADS
+                        number of threads for PBS job of MODE [default=28]
+  -e EMAIL, --email EMAIL
+                        PBS setting - email address
+  --pbs-config PBS_CONFIG
+                        Must be set when --mode 'container'. Path to PBS configuration file which must includ PBS headers and any other required settings to run the Container image. Contents in the config
+                        file will be included at the top of all generated PBS scripts [default=None]
+
+[4] Optional arguments:
+  -h, --help            show this help message and exit
+  --pipeline-dir PIPELINE_DIR
+                        directory of pipeline script for finding combine_fastq.jl
+  --verbose             turn on to show verbose messages
+  --debug               turn on to show debugging messages
+
+---------------- APP: mima-vis-taxa ----------------
+
+USAGE:
+perl /opt/mima/scripts/visualisation/taxa_plot.pl <feature_table.tsv> <metadata.tsv> <column_group:g1:g2> <output_dir> <output_prefix> <top_N> <figure_width> <figure_height>
+
+   feature_table.tsv         path to the taxonomic feature table of relative abundances
+   metadata.tsv              path to the study metadata table with group information
+   column_grouop:g1:g2       group-column from metadata table and group levels in the format [column_group:group1:group2]
+   output_dir                path to output directory
+   output_prefix             prefix that will be used for output files
+   top_N                     top N taxa to show in the stack bar plot, remaining taxa are grouped together as 'Others'
+   figure_width              output figure width
+   figure_heigth             output figure height
+
+USAGE:
+perl /opt/mima/scripts/visualisation/taxa_plot.pl <feature_table.tsv> <metadata.tsv> <column_group:g1:g2> <output_dir> <output_prefix> <top_N> <figure_width> <figure_height>
+
+   feature_table.tsv         path to the taxonomic feature table of relative abundances
+   metadata.tsv              path to the study metadata table with group information
+   column_grouop:g1:g2       group-column from metadata table and group levels in the format [column_group:group1:group2]
+   output_dir                path to output directory
+   output_prefix             prefix that will be used for output files
+   top_N                     top N taxa to show in the stack bar plot, remaining taxa are grouped together as 'Others'
+   figure_width              output figure width
+   figure_heigth             output figure height
+
+---------------- APP: mima-visualisation ----------------
+usage: visualisation.py --feature-table FEATURE_TABLE [FEATURE_TABLE ...] --metadata METADATA --study-groups STUDY_GROUPS --output-dir OUTPUT_DIR [--plot-insignificant] [--ini-file INI_FILE] [-h] [--verbose]
+                        [--debug]
+
+Visualisation module part of the MRC Metagenomics pipeline
+
+[1] Required arguments:
+  --feature-table FEATURE_TABLE [FEATURE_TABLE ...]
+                        Path to the tab-separated feature table file where rows are Features and columns are Samples. The first column header should be either: <empty>|ID|# Pathway|# Gene|# IGGsearch species
+                        table Other heading columns are current unsupported and no output will be generated.
+  --metadata METADATA   Path to the tab-/comma-separated metadata file
+  --study-groups STUDY_GROUPS
+                        Comma separated list of column names in the metadata table which contain the study groups of interest
+  --output-dir OUTPUT_DIR
+                        Output directory
+
+[2] Processing arguments:
+  --plot-insignificant  turn on to generate plots for insignificant comparisons
+  --ini-file INI_FILE   Configuration file for figure parameters e.g., size [default: figures.ini]
+
+[3] Optional arguments:
+  -h, --help            show this message and exit
+  --verbose             turn on verbose messages
+  --debug               turn on debugging messages
+
+---------------- APP: mima-classifier-RF ----------------
+Loading required package: ggplot2
+Loading required package: lattice
+Warning messages:
+1: package 'ggplot2' was built under R version 4.2.3 
+2: package 'lattice' was built under R version 4.2.3 
+Loading required package: ParamHelpers
+Warning message: 'mlr' is in 'maintenance-only' mode since July 2019.
+Future development will only happen in 'mlr3'
+(<https://mlr3.mlr-org.com>). Due to the focus on 'mlr3' there might be
+uncaught bugs meanwhile in {mlr} - please consider switching.
+
+Attaching package: 'mlr'
+
+The following object is masked from 'package:caret':
+
+    train
+
+
+Attaching package: 'kernlab'
+
+The following object is masked from 'package:ggplot2':
+
+    alpha
+
+randomForest 4.7-1.1
+Type rfNews() to see new features/changes/bug fixes.
+
+Attaching package: 'randomForest'
+
+The following object is masked from 'package:ggplot2':
+
+    margin
+
+
+Attaching package: 'ranger'
+
+The following object is masked from 'package:randomForest':
+
+    importance
+
+Type 'citation("pROC")' for a citation.
+
+Attaching package: 'pROC'
+
+The following objects are masked from 'package:stats':
+
+    cov, smooth, var
+
+Warning message:
+package 'RColorBrewer' was built under R version 4.2.3 
+Loading required package: iterators
+Loading required package: parallel
+Warning message:
+package 'iterators' was built under R version 4.2.3 
+Usage: /opt/mima/scripts/classifier/random_forest/classifier_pipeline.R [options]
+
+
+Options:
+	-i INPUT, --input=INPUT
+		input file: a list of tab seperated feature tables 
+                with rows (first row is header) and columns (first column is 
+                sample ID) indicate features and samples, respectively
+
+	-m METADATA, --metadata=METADATA
+		input file of study metadata where the first row is 
+                header and the first column is assumed to be the same ID. The 
+                metadata is applied to all the feature tables
+
+	-c COLUMN, --column=COLUMN
+		column header from the metadata table that contains 
+                the grouping categories for classfication
+
+	-o OUTPUT, --output=OUTPUT
+		output directory
+
+	-h, --help
+		Show this help message and exit
+
+

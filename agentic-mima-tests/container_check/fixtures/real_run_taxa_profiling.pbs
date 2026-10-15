@@ -1,0 +1,29 @@
+#!/bin/bash
+#PBS -N mima-taxa
+#PBS -q hugemem
+#PBS -P mp96
+#PBS -l ncpus=28
+#PBS -l walltime=10:00:00
+#PBS -l mem=400GB
+#PBS -l storage=gdata/mp96+scratch/mp96
+#PBS -j oe
+
+set -x
+module load apptainer
+
+# Define the container image path and binding
+export IMAGE_DIR=/g/data/mp96/mima4_v2.0.0_20240409.sif
+export APPTAINER_BIND="/scratch/mp96/USER:/scratch/mp96/USER,/g/data/mp96:/g/data/mp96"
+
+cd /scratch/mp96/USER/mima_tutorial/output/Taxonomy_profiling/
+
+
+
+apptainer exec ${IMAGE_DIR} bash /scratch/mp96/USER/mima_tutorial/output/Taxonomy_profiling/SRR17380115.sh
+apptainer exec ${IMAGE_DIR} bash /scratch/mp96/USER/mima_tutorial/output/Taxonomy_profiling/SRR17380222.sh
+apptainer exec ${IMAGE_DIR} bash /scratch/mp96/USER/mima_tutorial/output/Taxonomy_profiling/SRR17380209.sh
+apptainer exec ${IMAGE_DIR} bash /scratch/mp96/USER/mima_tutorial/output/Taxonomy_profiling/SRR17380232.sh
+apptainer exec ${IMAGE_DIR} bash /scratch/mp96/USER/mima_tutorial/output/Taxonomy_profiling/SRR17380122.sh
+apptainer exec ${IMAGE_DIR} bash /scratch/mp96/USER/mima_tutorial/output/Taxonomy_profiling/SRR17380231.sh
+apptainer exec ${IMAGE_DIR} bash /scratch/mp96/USER/mima_tutorial/output/Taxonomy_profiling/SRR17380236.sh
+apptainer exec ${IMAGE_DIR} bash /scratch/mp96/USER/mima_tutorial/output/Taxonomy_profiling/SRR17380218.sh
