@@ -1,0 +1,42 @@
+<evaluation>
+  <qa_pair>
+    <question>Two manifests for the next QC run are in /tmp/mima_eval/manifests. Only one of them is safe to pass to the pipeline as it is. Give the file name of the safe one, nothing else.</question>
+    <answer>manifest_run1.csv</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The study metadata /tmp/mima_eval/study/metadata.tsv is going to be analysed with the species relative-abundance feature table in /tmp/mima_eval/study/featureTables, grouping by the column 'lab'. How many metadata samples have no column in that feature table? Answer with a number.</question>
+    <answer>2</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Using the same metadata and species relative-abundance table as above (grouping by 'lab'), which missing sample ID comes first alphabetically? Answer with the ID only.</question>
+    <answer>M04</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The clean reads in /tmp/mima_eval/CleanReads will be profiled with Bracken, whose database provides read lengths 50, 100 and 150. Which --read-length value should be used? Answer with the number only.</question>
+    <answer>150</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The QC log /tmp/mima_eval/logs/mima-QC.o900001 reports a damaged input file for one sample. Does the QC_module folder /tmp/mima_eval/run/QC_module contain any output at all (clean reads, scripts, logs or reports) for that sample? Answer Yes or No.</question>
+    <answer>No</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In the taxonomy PBS log /tmp/mima_eval/logs/mima-taxa.o900002, for how many different samples did the script fail to find Bracken's report files? Answer with a number.</question>
+    <answer>4</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Scan /tmp/mima_eval/logs/E03_bracken.log for known failure signatures. What is the identifier of the signature reported for it? Answer with the identifier only.</question>
+    <answer>bracken-input-missing</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The PBS header config /tmp/mima_eval/config/pbs_header_taxa.cfg is meant for the taxonomy stage. By how many GB is its memory request below the amount the tutorial says Kraken2 needs? Answer with a number.</question>
+    <answer>180</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The Bracken database at /tmp/mima_eval/db/GTDB_Kraken will be used by mima-taxa-profiling on the clean reads in /tmp/mima_eval/run/CleanReads. Of the read lengths 50, 75, 100 and 150, which one cannot be used with this database? Answer with the number only.</question>
+    <answer>75</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>The manifest /tmp/mima_eval/manifests/manifest_run1.csv lists the samples that should have been through QC. In /tmp/mima_eval/run/QC_module, how many of those samples have no QC output at all? Answer with a number.</question>
+    <answer>2</answer>
+  </qa_pair>
+</evaluation>

@@ -42,30 +42,42 @@ class Result:
     def __init__(self, stage):
         self.stage, self.findings, self.facts = stage, [], {}
 
-    def error(self, msg):
-        self.findings.append({"severity": "error", "message": msg})
+    def error(self, msg, **extra):
+        self.findings.append(dict({"severity": "error", "message": msg}, **extra))
 
-    def warn(self, msg):
-        self.findings.append({"severity": "warning", "message": msg})
+    def warn(self, msg, **extra):
+        self.findings.append(dict({"severity": "warning", "message": msg}, **extra))
 
-    def info(self, msg):
-        self.findings.append({"severity": "info", "message": msg})
+    def info(self, msg, **extra):
+        self.findings.append(dict({"severity": "info", "message": msg}, **extra))
 
     @property
     def ok(self):
         return not any(f["severity"] == "error" for f in self.findings)
+
+    def summary(self):
+        """Counts for a quick read: a long list of missing files is easy to mis-copy, a short summary is not."""
+        by_sample = {}
+        for f in self.findings:
+            if f.get("kind") in ("missing", "empty") and f.get("sample"):
+                by_sample[f["sample"]] = by_sample.get(f["sample"], 0) + 1
+        return {"errors": sum(1 for f in self.findings if f["severity"] == "error"),
+                "warnings": sum(1 for f in self.findings if f["severity"] == "warning"),
+                "missing_or_empty_files": sum(1 for f in self.findings if f.get("kind") in ("missing", "empty")),
+                "samples_with_missing_or_empty_files": len(by_sample),
+                "missing_or_empty_files_by_sample": dict(sorted(by_sample.items()))}
 
 
 def nonempty(path):
     return path.is_file() and path.stat().st_size > 0
 
 
-def expect(res, path, label=None):
+def expect(res, path, label=None, sample=None):
     if not path.exists():
-        res.error(f"missing: {label or path}")
+        res.error(f"missing: {label or path}", kind="missing", sample=sample)
         return False
     if path.is_file() and path.stat().st_size == 0:
-        res.error(f"empty file: {label or path}")
+        res.error(f"empty file: {label or path}", kind="empty", sample=sample)
         return False
     return True
 
@@ -99,7 +111,7 @@ def check_qc(res, d, manifest):
         res.error("no samples found: give --manifest or check the QC_module directory")
     for s in samples:
         for f in (f"CleanReads/{s}_clean_1.fq.gz", f"CleanReads/{s}_clean_2.fq.gz", f"{s}_qc_module.log", f"QCReport/{s}.json"):
-            expect(res, d / f, f"{s}: {f}")
+            expect(res, d / f, f"{s}: {f}", sample=s)
     scan_logs_into(res, d)
     rpt = d / "QC_report.csv"
     if not rpt.exists():
@@ -146,10 +158,10 @@ def check_taxa(res, d, manifest):
         res.error("no samples found: give --manifest or check the Taxonomy_profiling directory")
     for s in samples:
         for f in (f"kraken2/{s}.kraken2.output", f"kraken2/{s}.kraken2.report", f"{s}_bracken.log"):
-            expect(res, d / f, f"{s}: {f}")
+            expect(res, d / f, f"{s}: {f}", sample=s)
         for rank, plural in RANKS.items():
-            expect(res, d / "bracken" / f"{s}_{rank}", f"{s}: bracken/{s}_{rank}")
-            expect(res, d / "bracken" / f"{s}.kraken2_bracken_{plural}.report", f"{s}: bracken/{s}.kraken2_bracken_{plural}.report")
+            expect(res, d / "bracken" / f"{s}_{rank}", f"{s}: bracken/{s}_{rank}", sample=s)
+            expect(res, d / "bracken" / f"{s}.kraken2_bracken_{plural}.report", f"{s}: bracken/{s}.kraken2_bracken_{plural}.report", sample=s)
     scan_logs_into(res, d)
     summ = d / "bracken-summary.tsv"
     if not summ.exists():
@@ -200,7 +212,7 @@ def check_func(res, d, manifest):
         res.error("no samples found: give --manifest or check the Function_profiling directory")
     for s in samples:
         for f in ("genefamilies", "pathabundance", "pathcoverage"):
-            expect(res, d / f"{s}_combine_{f}.tsv", f"{s}: {s}_combine_{f}.tsv")
+            expect(res, d / f"{s}_combine_{f}.tsv", f"{s}: {s}_combine_{f}.tsv", sample=s)
     scan_logs_into(res, d)
 
 
@@ -297,7 +309,7 @@ def main():
     STAGES[args.stage](res, d, args.manifest)
 
     if args.format == "json":
-        print(json.dumps({"stage": res.stage, "ok": res.ok, "facts": res.facts, "findings": res.findings}, indent=2))
+        print(json.dumps({"stage": res.stage, "ok": res.ok, "summary": res.summary(), "facts": res.facts, "findings": res.findings}, indent=2))
     else:
         order = {"error": 0, "warning": 1, "info": 2}
         for f in sorted(res.findings, key=lambda x: order[x["severity"]]):
@@ -305,6 +317,10 @@ def main():
         for k, v in res.facts.items():
             print(f"FACT    {k}: {v}")
         n_err = sum(1 for f in res.findings if f["severity"] == "error")
+        s = res.summary()
+        if s["missing_or_empty_files"]:
+            print(f"SUMMARY missing or empty files: {s['missing_or_empty_files']}"
+                  + (f" across {s['samples_with_missing_or_empty_files']} sample(s)" if s["samples_with_missing_or_empty_files"] else ""))
         print(f"\nRESULT: {'COMPLETE' if res.ok else 'INCOMPLETE'} for stage '{res.stage}' ({n_err} error(s))")
     return 0 if res.ok else 1
 

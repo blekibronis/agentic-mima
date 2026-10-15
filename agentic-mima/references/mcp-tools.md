@@ -41,6 +41,8 @@ Every result has: `status`, `exit_code`, `output` (the script's own text), `data
 | `bad_plan`, `unreadable`, `no_scripts`, `no_fastq`, `no_logs`, `usage_problem` | The input could not be used | Fix the input or ask the user; do not retry unchanged |
 | `tool_error`, `timeout`, `unexpected_exit` | The tool itself failed (for example `qstat` is missing on this machine) | Say so, give the user the equivalent shell command to run where it works, and do not guess a result |
 
+Long results lead with a summary. For `mima_check_outputs`, `data.summary` gives the counts (errors, warnings, missing or empty files, and how many are missing per sample) before the full list in `data.findings`. Report the summary and give the full list only when asked; long lists are easy to mis-copy, and the summary is the number to quote.
+
 If `truncated` is true, the output was cut: narrow the request (one stage, one folder) and ask again. A result is evidence only for what it shows. Quote file names and lines from `output` or `data` exactly, as with shell output.
 
 ## What no tool does

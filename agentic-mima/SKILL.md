@@ -3,7 +3,7 @@ name: agentic-mima
 description: Turns plain-English shotgun metagenomics requests into validated, reproducible MIMA pipeline plans and commands (QC, Kraken2/Bracken taxonomy, HUMAnN3 functional profiling, taxonomy bar plots, alpha/beta diversity, differential abundance, Random Forest classification) for the MIMA Apptainer container on an OpenPBS cluster, then guides confirmed job submission, monitoring, output checks, troubleshooting and reporting. Use whenever the user wants to run, plan, submit, monitor, check or interpret a microbiome or metagenomics analysis, mentions MIMA, manifest.csv, CleanReads, Bracken, feature tables or PBS scripts, asks to compare healthy control and disease groups, asks why a PBS job failed, or wants a QC, taxonomic or functional profile of shotgun sequencing data, even if they do not name the pipeline. Do NOT use for 16S amplicon analysis, genome assembly or binning, or general Python or R coding.
 compatibility: Needs bash and Python 3.6 or later (standard library only) for the bundled scripts; Gadi's default python3 is 3.6.8. Targets the MIMA container (mima4_v2.0.0) with Apptainer and OpenPBS. Submitting, monitoring and output checks need an execution tool with access to the cluster, or the project's MCP server (tools named mima_*); without either the skill gives the user the commands to run.
 metadata:
-  version: 0.3.0
+  version: 0.3.1
   category: workflow-automation
 ---
 

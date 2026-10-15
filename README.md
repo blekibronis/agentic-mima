@@ -4,7 +4,7 @@ A [Claude Agent Skill](https://docs.claude.com/en/docs/agents-and-tools/agent-sk
 
 It is built for the **MIMA Apptainer container** (`mima4_v2.0.0`) on an **OpenPBS** cluster. It was developed on [NCI Gadi](https://opus.nci.org.au/display/Help/0.+Welcome+to+Gadi).
 
-> **Status: v0.3.0, pre-release.** The scripts are tested and have been run on Gadi, but no complete pipeline run has been driven end to end through the skill yet. See [What has and has not been verified](#what-has-and-has-not-been-verified) before relying on it.
+> **Status: v0.3.1, pre-release.** The scripts are tested and have been run on Gadi, but no complete pipeline run has been driven end to end through the skill yet. See [What has and has not been verified](#what-has-and-has-not-been-verified) before relying on it.
 
 ## What it does
 
@@ -70,7 +70,7 @@ The skill is the folder [`agentic-mima/`](agentic-mima/). Its entry point is `SK
 cp -r agentic-mima ~/.claude/skills/
 ```
 
-**On the cluster.** Copy the folder to your home directory (for example with `scp -r`) and point your execution tool or the MCP server at it.
+**On the cluster.** Clone this repository into your home directory (`git clone <repository URL>`), then point your execution tool or the MCP server at the `agentic-mima/` folder inside it. Update later with `git pull`.
 
 Skill menus and install steps change between Claude releases. If these steps do not match your version, follow the current [Agent Skills documentation](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/overview).
 
@@ -91,7 +91,7 @@ agentic-mima/            the skill (what Claude loads)
   references/            parameters, lab defaults, troubleshooting, interpretation, MCP tool mapping
   assets/                plan and report templates
 agentic-mima-mcp/        optional MCP server that exposes the scripts as tools (FastMCP)
-agentic-mima-tests/      test kit: 107 automated tests, conversation tests, trigger queries
+agentic-mima-tests/      test kit: 110 automated tests, conversation tests, trigger queries
 ```
 
 The skill folder deliberately contains only `SKILL.md`, `scripts/`, `references/` and `assets/`. The tests and server live beside it.
@@ -117,12 +117,12 @@ Setup, the tool list and how to connect a client over SSH are in [`agentic-mima-
 
 ```bash
 cd agentic-mima-tests
-python3 run_tests.py                    # 107 tests; needs Python 3.8 or later
+python3 run_tests.py                    # 110 tests; needs Python 3.8 or later
 ```
 
 ```bash
 cd agentic-mima-mcp
-python -m unittest discover -s tests    # 24 tests; needs Python 3.10 or later and fastmcp
+python -m unittest discover -s tests    # 25 tests; needs Python 3.10 or later and fastmcp
 ```
 
 A pass shows that the scripts behave as designed on mock inputs and that the skill's files are consistent. It does not show that Claude follows the instructions in a conversation; use `agentic-mima-tests/conversation_tests.md` and `trigger_queries.md` for that.
@@ -132,8 +132,8 @@ A pass shows that the scripts behave as designed on mock inputs and that the ski
 **Verified**
 
 - The scripts run on Gadi's Python 3.6.8 with the current files: manifest, metadata, PBS config and PBS script validation, command building (good plans accepted, bad plans refused), read-length estimation, QC output checks, log scanning and job-status reading.
-- 107 automated tests pass. A static check confirms the scripts use only Python 3.6 features.
-- The MCP server's 24 tests pass on Gadi (Python 3.12.1, fastmcp 4.1.0), and the 10 evaluation questions recompute correctly by direct tool calls.
+- 110 automated tests pass. A static check confirms the scripts use only Python 3.6 features.
+- The MCP server's 24 tests (v0.3.0) pass on Gadi (Python 3.12.1, fastmcp 4.1.0), and the 10 evaluation questions recompute correctly by direct tool calls.
 - An MCP client (Antigravity 2.0) connected to the server on Gadi over SSH, listed 11 tools, called `mima_list_modules`, and had a path outside the allowed folders refused.
 
 **Not yet verified**
@@ -159,3 +159,7 @@ Issues and pull requests are welcome. Please:
 - change parameters in `scripts/command_specs.json` (the single source of truth), then regenerate `references/module-parameters.md` with `scripts/generate_module_docs.py`,
 - add or update a test in `agentic-mima-tests/run_tests.py` for any behaviour change, and run the suite before opening a pull request,
 - mark any new error pattern as verified only if it comes from a real log.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

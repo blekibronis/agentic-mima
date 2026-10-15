@@ -137,7 +137,7 @@
       ],
       "evidence": {
         "source": "Rafael (project owner), Gadi, container mima4_v2.0.0_20240409, 2026-10-14: bracken run by hand inside the container for sample SRR17380115 of the tutorial run",
-        "observed_line": ">> ERROR: Input file /scratch/<project>/<user>/mima_tutorial/output/Taxonomy_profiling/kraken2/SRR17380115.kraken2.report does not exist",
+        "observed_line": ">> ERROR: Input file /scratch/PROJECT/USER/mima_tutorial/output/Taxonomy_profiling/kraken2/SRR17380115.kraken2.report does not exist",
         "note": "Seen in an interactive run on 2026-10-14, not in a PBS log, and after the tutorial outputs had been cleared (kraken2/ empty, modified 2026-08-02 14:28, after the 2026-08-01 job). It shows what Bracken prints when the report is absent. It does not explain why the 2026-08-01 job's Bracken step failed."
       }
     },
@@ -154,7 +154,7 @@
       ],
       "evidence": {
         "source": "Rafael (project owner), Gadi, tutorial run, PBS log mima-taxa.o175269652 line 68, seen 2026-10-14",
-        "observed_line": "mv: cannot stat '/scratch/<project>/<user>/mima_tutorial/output/Taxonomy_profiling/kraken2/SRR17380115.kraken2_bracken_*.report': No such file or directory",
+        "observed_line": "mv: cannot stat '/scratch/PROJECT/USER/mima_tutorial/output/Taxonomy_profiling/kraken2/SRR17380115.kraken2_bracken_*.report': No such file or directory",
         "note": "The same line appears for all nine samples in job 175269652 (Exit Status 1). Bracken's own error for that job is unknown: the SAMPLE_bracken.log files no longer exist."
       }
     },
