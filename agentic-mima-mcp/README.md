@@ -21,6 +21,8 @@ checks arguments, runs one script, and returns its exit code, a status word and 
 | `mima_check_report` | check_report | read | ok, errors, unreadable |
 | `mima_prepare_inputs` | prepare_inputs (preview) | nothing | prepared, unchanged, needs_input, unreadable |
 | `mima_write_prepared_inputs` | prepare_inputs `--apply` | corrected copies of the manifest and metadata in a NEW folder (`out_dir`); originals untouched | prepared, unchanged, needs_input, unreadable |
+| `mima_plan_pbs_header` | make_pbs_header (preview) | nothing | prepared, needs_input, invalid |
+| `mima_write_pbs_header` | make_pbs_header `--apply` | a NEW PBS header file (`out_file`); never overwrites | prepared, needs_input, invalid |
 | `mima_prepare_submission` | submit_jobs **dry run** | writes `submission_plan.json` in `run_dir` | dry_run_ok, invalid, bad_plan |
 
 ## Safety design

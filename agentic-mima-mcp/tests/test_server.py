@@ -25,7 +25,8 @@ from mima_mcp.server import mcp  # noqa: E402
 
 EXPECTED_TOOLS = {"mima_list_modules", "mima_build_commands", "mima_validate_manifest", "mima_validate_metadata", "mima_validate_pbs_config",
                   "mima_validate_pbs_scripts", "mima_estimate_read_length", "mima_check_outputs", "mima_check_job_status", "mima_scan_logs",
-                  "mima_check_report", "mima_prepare_submission", "mima_prepare_inputs", "mima_write_prepared_inputs"}
+                  "mima_check_report", "mima_prepare_submission", "mima_prepare_inputs", "mima_write_prepared_inputs",
+                  "mima_plan_pbs_header", "mima_write_pbs_header"}
 BRACKEN = ">> ERROR: Input file /scratch/x/kraken2/S1.kraken2.report does not exist"
 
 
@@ -113,7 +114,7 @@ class TestToolSurface(Base):
             self.assertTrue(name.startswith("mima_"), name)
             self.assertIs(d["destructiveHint"], False, name)
             self.assertIs(d["openWorldHint"], False, name)
-            self.assertIs(d["readOnlyHint"], name not in ("mima_prepare_submission", "mima_write_prepared_inputs"), name)
+            self.assertIs(d["readOnlyHint"], name not in ("mima_prepare_submission", "mima_write_prepared_inputs", "mima_write_pbs_header"), name)
 
     def test_runner_refuses_execution_flags(self):
         for flag in ("--execute", "--confirm", "--approval", "--allow-resubmit", "--qsub"):
@@ -309,6 +310,49 @@ class TestPrepareSubmission(Base):
                      [{"id": "a", "script": str(script), "extra": 1}]):
             self.assertIsNotNone(call_error("mima_prepare_submission", {"jobs": jobs, "run_dir": str(self.tmp)}), jobs)
         self.assertIsNotNone(call_error("mima_prepare_submission", {"jobs": [{"id": "a", "script": str(script)}], "run_dir": str(self.tmp / "missing")}))
+
+
+class TestHeaderTools(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self._env = dict(os.environ)
+        os.environ.pop("PROJECT", None)
+        os.environ["MIMA_ALLOWED_ROOTS"] = "%s:/scratch/ab01:/g/data/ab01" % self.tmp
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._env)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def args(self, **over):
+        a = {"module": "taxa", "samples": 6, "image_path": "/g/data/ab01/mima.sif", "project": "ab01",
+             "paths": ["/scratch/ab01/run", "/g/data/ab01/REFDB/GTDB_Kraken"]}
+        a.update(over)
+        return a
+
+    def test_preview_writes_nothing_and_apply_writes_a_validated_new_file(self):
+        out = self.tmp / "pbs_header_taxa.cfg"
+        r = call("mima_plan_pbs_header", self.args())
+        self.assertEqual(r["status"], "prepared", r)
+        self.assertIn("#PBS -l walltime=3:00:00", [x["line"] for x in r["data"]["lines"]])
+        self.assertFalse(out.exists())
+        w = call("mima_write_pbs_header", self.args(out_file=str(out)))
+        self.assertEqual((w["status"], w["data"]["written"]), ("prepared", str(out)), w)
+        self.assertEqual(call("mima_validate_pbs_config", {"config_path": str(out), "module": "taxa"})["status"], "valid")
+        again = call("mima_write_pbs_header", self.args(out_file=str(out)))
+        self.assertEqual(again["status"], "needs_input")  # never overwrites
+
+    def test_missing_facts_and_other_modules_are_questions(self):
+        r = call("mima_plan_pbs_header", {"module": "taxa", "samples": 3})
+        self.assertEqual(r["status"], "needs_input")
+        self.assertTrue(r["data"]["needs_input"])
+        self.assertEqual(call("mima_plan_pbs_header", self.args(module="qc"))["status"], "needs_input")
+
+    def test_arguments_are_checked(self):
+        self.assertIn("outside the allowed folders", call_error("mima_write_pbs_header", self.args(out_file="/etc/h.cfg")))
+        self.assertIn("outside the allowed folders", call_error("mima_plan_pbs_header", self.args(paths=["/etc"])))
+        self.assertIn("outside the allowed folders", call_error("mima_plan_pbs_header", self.args(image_path="/opt/x.sif")))
+        self.assertIn("invalid value", call_error("mima_plan_pbs_header", self.args(project="-x")))
 
 
 if __name__ == "__main__":

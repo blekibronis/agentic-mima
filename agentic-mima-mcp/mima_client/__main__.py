@@ -11,7 +11,8 @@ def ask_yes(name, args):
     if not sys.stdin.isatty():
         print("  [client] %s needs a person's yes and there is no terminal: denied." % name)
         return False
-    what = "writes corrected copies into a new folder" if name == "mima_write_prepared_inputs" else "dry run only"
+    what = {"mima_write_prepared_inputs": "writes corrected copies into a new folder",
+            "mima_write_pbs_header": "writes a new PBS header file"}.get(name, "dry run only")
     print("  [client] The model wants to run %s (%s) with: %s" % (name, what, args))
     return input("  allow? [y/N] ").strip().lower() == "y"
 
