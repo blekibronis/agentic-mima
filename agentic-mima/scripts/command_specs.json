@@ -37,7 +37,7 @@
         "--ref": {
           "type": "abs_file_in",
           "required": true,
-          "help": "Host reference genome FASTA, e.g. GRCh38_latest_genome.fna"
+          "help": "Host reference genome FASTA, e.g. GRCh38_latest_genome.fna. Use the genome of the host species of the samples: a complete human assembly for human samples, the animal's own genome for animal samples. In low-biomass sites such as saliva, tissue or blood the host can be most of the library, so a wrong or missing host genome leaves host reads in the clean data and uses up depth in every later step. Removing human reads before data are shared is also a privacy step (general practice). The file must sit under a folder bound into the container."
         },
         "--mode": {
           "type": "choice",
@@ -407,7 +407,7 @@
           "type": "int",
           "min": 1,
           "required": true,
-          "help": "Number of top taxa to colour; the rest become Other"
+          "help": "Number of top taxa to colour; the rest become Other. With a small N the Other group can dominate; with a large N at species level the legend is unreadable. The tutorial uses 8, though its example file names say top 7 (unresolved)."
         },
         "figure_width": {
           "type": "number",

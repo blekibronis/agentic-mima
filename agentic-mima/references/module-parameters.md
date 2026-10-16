@@ -27,7 +27,7 @@ UNVERIFIED marks details the tutorial does not confirm. Check them with `apptain
 | `-o` | abs_dir_out | yes |  | Output directory; fails if it already contains subdirectories |
 | `-m` | abs_file_in | yes |  | manifest.csv (Sample_ID,FileID_R1,FileID_R2) |
 | `--num-pbs-jobs` | int | no | 4 | Number of PBS scripts to generate |
-| `--ref` | abs_file_in | yes |  | Host reference genome FASTA, e.g. GRCh38_latest_genome.fna |
+| `--ref` | abs_file_in | yes |  | Host reference genome FASTA, e.g. GRCh38_latest_genome.fna. Use the genome of the host species of the samples: a complete human assembly for human samples, the animal's own genome for animal samples. In low-biomass sites such as saliva, tissue or blood the host can be most of the library, so a wrong or missing host genome leaves host reads in the clean data and uses up depth in every later step. Removing human reads before data are shared is also a privacy step (general practice). The file must sit under a folder bound into the container. |
 | `--mode` | choice (container/single) | no | container | Use container for MIMA container runs |
 | `--pbs-config` | abs_file_in | if --mode is container |  | PBS header config file (pbs_header_qc.cfg) |
 | `-s` | int | no |  | Maximum number of substitutions allowed between duplicates for clumpify.sh (BBTools). Default not shown by --help. |
@@ -129,7 +129,7 @@ UNVERIFIED marks details the tutorial does not confirm. Check them with `apptain
 | `group_spec` | group_spec | yes |  | column:group1:group2[:...] (case-sensitive) |
 | `output_dir` | abs_dir_out | yes |  | Output directory |
 | `prefix` | name | yes |  | Prefix for output files |
-| `top_n` | int | yes |  | Number of top taxa to colour; the rest become Other |
+| `top_n` | int | yes |  | Number of top taxa to colour; the rest become Other. With a small N the Other group can dominate; with a large N at species level the legend is unreadable. The tutorial uses 8, though its example file names say top 7 (unresolved). |
 | `figure_width` | number | yes |  | Figure width in inches |
 | `figure_height` | number | yes |  | Figure height in inches |
 
