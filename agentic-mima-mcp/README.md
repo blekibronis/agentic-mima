@@ -19,6 +19,8 @@ checks arguments, runs one script, and returns its exit code, a status word and 
 | `mima_check_job_status` | check_job_status (calls qstat) | read | complete, failed, in_progress, unresolved, tool_error |
 | `mima_scan_logs` | scan_logs | read | no_known_errors, errors_found, no_logs |
 | `mima_check_report` | check_report | read | ok, errors, unreadable |
+| `mima_prepare_inputs` | prepare_inputs (preview) | nothing | prepared, unchanged, needs_input, unreadable |
+| `mima_write_prepared_inputs` | prepare_inputs `--apply` | corrected copies of the manifest and metadata in a NEW folder (`out_dir`); originals untouched | prepared, unchanged, needs_input, unreadable |
 | `mima_prepare_submission` | submit_jobs **dry run** | writes `submission_plan.json` in `run_dir` | dry_run_ok, invalid, bad_plan |
 
 ## Safety design
@@ -52,7 +54,7 @@ Client over SSH (UNTESTED; shown as the intended shape; needs non-interactive SS
 
     MIMA_SKILL_DIR=/path/to/agentic-mima python3 -m unittest discover -s tests -v
 
-31 tests (20 server + 5 alignment with the skill's `references/mcp-tools.md`), run against the real scripts: tool surface, refused flags, path confinement (including a symlink), tool annotations, argument
+35 tests (24 server + 5 alignment with the skill's `references/mcp-tools.md`), run against the real scripts: tool surface, refused flags, path confinement (including a symlink), tool annotations, argument
 checks, real manifest/plan/log cases, and the submission gate (the command that `mima_prepare_submission` returns is run
 without a terminal, with a working fake `qsub`, and must refuse and write no record).
 Tested with fastmcp 4.1.0 on Python 3.13.
@@ -63,7 +65,7 @@ Antigravity and Claude clients load tools and skills themselves. A model served 
 client, so `mima_client` is a small one. It talks to any OpenAI-compatible endpoint that supports tool calling, calls the server's
 tools in-process, and puts the skill's `SKILL.md` in the model's instructions. A tool `skill_read_file` lets the model read the
 skill's `references/` and `assets/` files on demand (nothing else; paths are confined), which replaces the file reading a Claude
-client would do for itself. It cannot submit: `mima_prepare_submission` is a dry run, and each call needs your typed yes.
+client would do for itself. It cannot submit: `mima_prepare_submission` is a dry run, and it and `mima_write_prepared_inputs` (corrected copies in a new folder) each need your typed yes per call.
 Without a terminal the call is denied. Every message, tool call and result is saved to a JSONL transcript.
 
     export MIMA_SKILL_DIR=$HOME/agentic-mima-repo/agentic-mima
@@ -85,7 +87,7 @@ data they use (default `/tmp/mima_eval`); `evals/verify_answers.py` recomputes e
 run the questions through a model. Either use mcp-builder's `scripts/evaluation.py` (needs an Anthropic API key, not used here), or
 `evals/run_llm_eval.py`, which works with any OpenAI-compatible endpoint that supports tool calling (for example vLLM started with
 `--enable-auto-tool-choice` and the tool-call parser for that model). It calls the tools in-process, withholds
-`mima_prepare_submission`, scores each answer by string comparison and writes full transcripts:
+`mima_prepare_submission` and `mima_write_prepared_inputs`, scores each answer by string comparison and writes full transcripts:
 
     python3 evals/make_eval_data.py $HOME/mima_eval
     python3 evals/run_llm_eval.py --base-url http://HOST:8000/v1 --model NAME --data-dir $HOME/mima_eval --out results.json

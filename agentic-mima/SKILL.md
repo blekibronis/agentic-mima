@@ -3,7 +3,7 @@ name: agentic-mima
 description: Turns plain-English shotgun metagenomics requests into validated, reproducible MIMA pipeline plans and commands (QC, Kraken2/Bracken taxonomy, HUMAnN3 functional profiling, taxonomy bar plots, alpha/beta diversity, differential abundance, Random Forest classification) for the MIMA Apptainer container on an OpenPBS cluster, then guides confirmed job submission, monitoring, output checks, troubleshooting and reporting. Use whenever the user wants to run, plan, submit, monitor, check or interpret a microbiome or metagenomics analysis, mentions MIMA, manifest.csv, CleanReads, Bracken, feature tables or PBS scripts, asks to compare healthy control and disease groups, asks why a PBS job failed, or wants a QC, taxonomic or functional profile of shotgun sequencing data, even if they do not name the pipeline. Do NOT use for 16S amplicon analysis, genome assembly or binning, or general Python or R coding.
 compatibility: Needs bash and Python 3.6 or later (standard library only) for the bundled scripts; Gadi's default python3 is 3.6.8. Targets the MIMA container (mima4_v2.0.0) with Apptainer and OpenPBS. Submitting, monitoring and output checks need an execution tool with access to the cluster, or the project's MCP server (tools named mima_*); without either the skill gives the user the commands to run.
 metadata:
-  version: 0.3.1
+  version: 0.4.0
   category: workflow-automation
 ---
 
@@ -65,7 +65,15 @@ Check the conversation first, then ask once for everything still missing, using 
 - A `pbs_header_*.cfg` per generator stage, and an output directory
 - Metadata file, grouping column and levels, and the feature table or tables (analysis). Use the `_relAbund` Bracken table for taxonomy (`_counts` is also accepted; say which); HUMAnN pathway or gene tables are accepted for function, but a `# Gene Family` header is rejected (see `references/troubleshooting.md`). The group column must be categorical, not numeric. For `mima-classifier-RF` the `-c` column is found by pattern matching, so its name must not be part of another header (`validate_metadata.py` warns), and the module is built for two groups. Ask whether any person was sampled more than once: if so, run `validate_metadata.py --subject-column`, and stop for `mima-visualisation` (repeated samples are out of scope; name MaAsLin2 or ANCOM-BC2 as alternatives you do not run). Ask for covariates such as age, sex, BMI and batch, and check them with `--covariate`. Group sizes below 4 are descriptive only and below 8 exploratory (`references/lab-defaults.md`). For taxonomy jobs pass the sample count to `validate_pbs_config.py --samples`
 
-### Step 3: Validate the input files
+### Step 3: Prepare and validate the input files
+
+Users are not expected to know the file conventions, so do not ask them to fix their files. Prepare corrected copies, show what changed, then validate.
+
+1. Dry run first, which writes nothing: `python3 scripts/prepare_inputs.py --manifest THEIR_SHEET --reads-dir READS_DIR --metadata THEIR_METADATA --out-dir RUN_DIR/prepared` (or `--from-reads READS_DIR` when they have no sheet). It fixes only mechanical problems: line endings, a byte-order mark, the delimiter, header names, stray spaces, full paths in the file columns, and sample IDs with characters other than letters, digits and underscores.
+2. Read the result to the user in plain words: what will change and why, and that their own files are never touched. The end line is `RESULT: PREPARED`, `RESULT: UNCHANGED` or `RESULT: NEEDS YOUR INPUT`.
+3. For `NEEDS YOUR INPUT`, put each listed question to the user and wait. Never swap R1 and R2, choose between colliding or duplicate IDs, join lanes, or rename or move their FASTQ files. Nothing is written until every question is answered.
+4. After the user says yes to a `PREPARED` plan, run the same command with `--apply`. It writes `manifest.csv`, `metadata.tsv` (when it changed) and `id_map.tsv` into the new folder. Use the files named under `use` from then on.
+5. Run the validators on the files you will use. In reports, give the user's own sample names, using `id_map.tsv`.
 
 ```bash
 python3 scripts/validate_manifest.py MANIFEST.csv
@@ -73,7 +81,7 @@ python3 scripts/validate_metadata.py METADATA.tsv --group-column lab --groups la
 python3 scripts/validate_pbs_config.py pbs_header_taxa.cfg --module taxa
 ```
 
-If the user uploaded the file, run the validator. If it lives on the cluster and you cannot see it, give the user the command (add `--reads-dir DIR --check-fs` for the manifest) and ask for the output. Expected output: each validator ends with `RESULT: VALID` (exit code 0), with any warnings listed above it. Exit code 1 means errors: explain each with its fix (`references/validation-rules.md` gives the reason for every rule). Do not treat unvalidated files as valid.
+If the user uploaded the file, run the validators. If it lives on the cluster and you cannot see it, give the user the command (add `--reads-dir DIR --check-fs` for the manifest) and ask for the output. Expected output: each validator ends with `RESULT: VALID` (exit code 0), with any warnings listed above it. Exit code 1 means errors: explain each with its fix (`references/validation-rules.md` gives the reason for every rule). Do not treat unvalidated files as valid. The preparation step does not replace validation, and it cannot check biology: it does not know which group a sample belongs to.
 
 ### Step 4: Build and validate the commands
 

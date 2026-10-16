@@ -12,7 +12,7 @@ script where the skill and the data are (on Gadi, from the server's venv).
     python3 run_llm_eval.py --base-url http://HOST:8000/v1 --model NAME \
         --data-dir $HOME/mima_eval --out results.json
 
-Nothing here submits a job: mima_prepare_submission is withheld from the model
+Nothing here submits a job or writes a file: mima_prepare_submission and mima_write_prepared_inputs are withheld from the model
 unless --allow-prepare-submission is given. The score is a string comparison
 with the answers in evaluation.xml; read the transcripts in --out as well.
 """
@@ -66,7 +66,7 @@ async def run(args):
     url = args.base_url.rstrip("/") + "/chat/completions"
     report, correct = [], 0
     async with Client(mcp) as client:
-        specs = tool_specs(await client.list_tools(), () if args.allow_prepare_submission else ("mima_prepare_submission",))
+        specs = tool_specs(await client.list_tools(), () if args.allow_prepare_submission else ("mima_prepare_submission", "mima_write_prepared_inputs"))
         print("tools offered: %d" % len(specs))
         for num, q, expected in questions:
             msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": q}]

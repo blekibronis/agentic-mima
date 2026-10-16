@@ -13,10 +13,12 @@ Exit code: 0 = valid (warnings allowed), 1 = errors, 2 = cannot read file.
 import argparse
 import csv
 import io
+import re
 import sys
 from pathlib import Path
 
 HEADER = ["Sample_ID", "FileID_R1", "FileID_R2"]
+ID_BAD = re.compile(r"[^A-Za-z0-9_]+")  # keep in step with prepare_inputs.py (a test checks this)
 FASTQ_EXT = (".fq.gz", ".fastq.gz", ".fq", ".fastq", ".fq.bz2", ".fastq.bz2")
 
 
@@ -64,6 +66,10 @@ def main():
                     errors.append(f"Line {n}: {col} is empty.")
                 elif val != val.strip():
                     errors.append(f"Line {n}: {col} has leading or trailing spaces: '{val}'.")
+            if ID_BAD.search(sid):
+                warns.append(f"Line {n}: Sample_ID '{sid}' has characters other than letters, digits and underscores. Sample_ID names every "
+                             "output file, so the project convention is letters, digits and underscores only (general practice, not proven to be "
+                             "required). prepare_inputs.py renames safely and keeps a mapping.")
             if sid in seen_ids:
                 errors.append(f"Line {n}: duplicate Sample_ID '{sid}' (first on line {seen_ids[sid]}).")
             seen_ids.setdefault(sid, n)

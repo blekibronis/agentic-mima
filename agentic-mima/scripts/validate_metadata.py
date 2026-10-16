@@ -15,6 +15,7 @@ Exit code: 0 = valid (warnings allowed), 1 = errors, 2 = cannot read file.
 import argparse
 import difflib
 import statistics
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -96,6 +97,11 @@ def main():
             errors.append(f"Duplicate sample IDs: {', '.join(dups[:5])}{' ...' if len(dups) > 5 else ''}")
         if any(not i.strip() for i in ids):
             errors.append("Some sample IDs are empty.")
+        odd = [i for i in ids if re.search(r"[^A-Za-z0-9_]", i)]
+        if odd:
+            warns.append(f"{len(odd)} sample ID(s) have characters other than letters, digits and underscores (for example '{odd[0]}'). "
+                         "The project convention is letters, digits and underscores only (general practice); the IDs must also match the "
+                         "manifest and feature tables exactly. prepare_inputs.py renames safely and keeps a mapping.")
     print(f"Samples in metadata: {len(rows)}   ID column: {id_col}")
 
     for gc in args.group_column:

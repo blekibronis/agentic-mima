@@ -15,6 +15,8 @@ When your tool list contains tools named `mima_*`, the project's MCP server is c
 |---|---|---|---|
 | 4 | `build_command.py --list-modules` | `mima_list_modules` | none |
 | 4 | `build_command.py PLAN.json` | `mima_build_commands` | pass the plan as an object (`plan`), not a file. `check_fs=true` only works when the server runs on the machine that holds the data |
+| 3 | `prepare_inputs.py` (dry run) | `mima_prepare_inputs` | writes nothing. Give `manifest_path` or `from_reads_dir`, plus `out_dir` (a new folder), and optionally `reads_dir` and `metadata_path` |
+| 3 | `prepare_inputs.py --apply` | `mima_write_prepared_inputs` | same arguments as the preview. Writes corrected copies into `out_dir`; ask the user first. Originals are never changed |
 | 3 | `validate_manifest.py` | `mima_validate_manifest` | `reads_dir` and `check_fs` replace `--reads-dir` and `--check-fs` |
 | 3 | `validate_metadata.py` | `mima_validate_metadata` | `group_column`, `groups`, `feature_tables` replace the flags; give the `_counts` or `_relAbund` table |
 | 3 | `validate_pbs_config.py` | `mima_validate_pbs_config` | `module` is `qc`, `taxa` or `func` |
@@ -38,6 +40,9 @@ Every result has: `status`, `exit_code`, `output` (the script's own text), `data
 | `invalid`, `errors`, `errors_found`, `failed` | The script found errors | Explain each error with its fix from `references/validation-rules.md` or `references/troubleshooting.md`; never edit files to make a check pass |
 | `in_progress` | A job is queued, held or running | Estimate the time left and ask the user to come back |
 | `unresolved` | The scheduler no longer knows a job | Stop waiting: read the PBS log with `mima_scan_logs` and `mima_check_outputs`, and say the status came from logs and outputs |
+| `prepared` | Changes are needed and listed in `data.changes` | Explain each in plain words and ask before `mima_write_prepared_inputs`; afterwards use the files in `data.use` and validate them |
+| `unchanged` | The files already follow the conventions | Use them as they are and validate |
+| `needs_input` | Questions are open in `data.needs_input` | Put each to the user; do not guess; nothing is written until they are answered |
 | `bad_plan`, `unreadable`, `no_scripts`, `no_fastq`, `no_logs`, `usage_problem` | The input could not be used | Fix the input or ask the user; do not retry unchanged |
 | `tool_error`, `timeout`, `unexpected_exit` | The tool itself failed (for example `qstat` is missing on this machine) | Say so, give the user the equivalent shell command to run where it works, and do not guess a result |
 
@@ -47,7 +52,7 @@ If `truncated` is true, the output was cut: narrow the request (one stage, one f
 
 ## What no tool does
 
-No tool runs a MIMA generator (`apptainer run --app ...`), a container, `qsub`, or anything that changes or deletes files or jobs. After `mima_build_commands`, give the user the commands to run themselves, after they have seen and approved them (Critical rule 4). Resume with `mima_validate_pbs_scripts` once the generator has written its scripts. `generate_module_docs.py` is a maintenance script and has no tool.
+No tool runs a MIMA generator (`apptainer run --app ...`), a container, `qsub`, or anything that changes or deletes the user's files or jobs. The two writers create new files only: `mima_write_prepared_inputs` makes corrected copies in a new folder, and `mima_prepare_submission` writes its plan file. After `mima_build_commands`, give the user the commands to run themselves, after they have seen and approved them (Critical rule 4). Resume with `mima_validate_pbs_scripts` once the generator has written its scripts. `generate_module_docs.py` is a maintenance script and has no tool.
 
 ## Submission
 

@@ -17,7 +17,7 @@ os.environ["MIMA_SKILL_DIR"] = str(SKILL)
 
 from fastmcp import Client  # noqa: E402
 
-from mima_client.agent import READ_TOOL, SUBMISSION_TOOL, Agent, read_skill_file  # noqa: E402
+from mima_client.agent import READ_TOOL, SUBMISSION_TOOL, WRITE_TOOL, Agent, read_skill_file  # noqa: E402
 from mima_mcp.server import mcp  # noqa: E402
 
 
@@ -83,7 +83,7 @@ class AgentTest(unittest.TestCase):
         self.assertIn("=== SKILL.md ===", system)
         self.assertIn("name: agentic-mima", system)
         offered = {t["function"]["name"] for t in Scripted.seen[0]["tools"]}
-        self.assertEqual(len(offered), 13)  # 12 MCP tools + the reference reader
+        self.assertEqual(len(offered), 15)  # 14 MCP tools + the reference reader
         self.assertIn(READ_TOOL, offered)
         self.assertEqual([e["name"] for e in events if e["event"] == "tool"], [READ_TOOL, "mima_list_modules"])
         tool_msgs = [m for m in agent.messages if m["role"] == "tool"]
@@ -100,6 +100,16 @@ class AgentTest(unittest.TestCase):
         agent, _ = run_agent([call(SUBMISSION_TOOL, plan, "a"), {"role": "assistant", "content": "ok"}], "dry run", approve=deny)
         self.assertEqual(asked, [SUBMISSION_TOOL])
         self.assertIn("Not approved", [m for m in agent.messages if m["role"] == "tool"][0]["content"])
+
+    def test_writer_tool_needs_a_yes_and_the_previewer_does_not(self):
+        asked = []
+
+        def deny(name, args):
+            asked.append(name)
+            return False
+        args = {"manifest_path": "/nonexistent/m.csv", "out_dir": "/nonexistent/out"}
+        run_agent([call(WRITE_TOOL, args, "a"), call("mima_prepare_inputs", args, "b"), {"role": "assistant", "content": "ok"}], "prepare", approve=deny)
+        self.assertEqual(asked, [WRITE_TOOL])
 
     def test_submission_tool_can_be_withheld_and_reasoning_dropped(self):
         reply = {"role": "assistant", "content": "done", "reasoning_content": "thinking..."}
