@@ -122,7 +122,7 @@ python3 run_tests.py                    # 110 tests; needs Python 3.8 or later
 
 ```bash
 cd agentic-mima-mcp
-python -m unittest discover -s tests    # 25 tests; needs Python 3.10 or later and fastmcp
+python -m unittest discover -s tests    # 26 tests; needs Python 3.10 or later and fastmcp
 ```
 
 A pass shows that the scripts behave as designed on mock inputs and that the skill's files are consistent. It does not show that Claude follows the instructions in a conversation; use `agentic-mima-tests/conversation_tests.md` and `trigger_queries.md` for that.
@@ -134,6 +134,7 @@ A pass shows that the scripts behave as designed on mock inputs and that the ski
 - The scripts run on Gadi's Python 3.6.8 with the current files: manifest, metadata, PBS config and PBS script validation, command building (good plans accepted, bad plans refused), read-length estimation, QC output checks, log scanning and job-status reading.
 - 110 automated tests pass. A static check confirms the scripts use only Python 3.6 features.
 - The MCP server's 25 tests (v0.3.1) pass on Gadi (Python 3.12.1, fastmcp 4.1.0), and the 10 evaluation questions recompute correctly by direct tool calls.
+- A language model (Antigravity 2.0, model not recorded) answered all 10 evaluation questions correctly through the server on Gadi, using `mima_validate_manifest`, `mima_validate_metadata`, `mima_estimate_read_length`, `mima_scan_logs`, `mima_check_outputs`, `mima_validate_pbs_config` and `mima_build_commands`. One run, on synthetic data, with questions written by Claude: it shows the tool descriptions are usable, not that the tools meet the lab's needs.
 - An MCP client (Antigravity 2.0) connected to the server on Gadi over SSH and listed 11 tools. Through it, six read-only tools returned the same results as the command-line scripts on real Gadi data: `mima_list_modules`, `mima_validate_manifest`, `mima_scan_logs`, `mima_check_outputs` (including its short summary), `mima_check_job_status` (a finished job aged out of history is reported as unresolved), and a path outside the allowed folders was refused.
 
 **Not yet verified**
@@ -141,7 +142,8 @@ A pass shows that the scripts behave as designed on mock inputs and that the ski
 - A complete run of every stage on real data, and a successful taxonomy run, so the expected-output lists for taxonomy are provisional.
 - `scripts/submit_jobs.py` on a real submission, and `scripts/check_report.py` beyond its help text.
 - 17 of the 22 patterns in `scripts/error_patterns.json` have not been seen in real logs (5 have).
-- A language model answering the 10 evaluation questions through the MCP server.
+- The same 10 questions answered by a second, locally hosted model (`agentic-mima-mcp/evals/run_llm_eval.py` is ready; not yet run).
+- `mima_validate_pbs_scripts`, `mima_check_report` and `mima_prepare_submission` called through a client.
 - Behaviour in different Claude clients and versions.
 
 ## Known limitations

@@ -52,7 +52,7 @@ Client over SSH (UNTESTED; shown as the intended shape; needs non-interactive SS
 
     MIMA_SKILL_DIR=/path/to/agentic-mima python3 -m unittest discover -s tests -v
 
-25 tests (20 server + 5 alignment with the skill's `references/mcp-tools.md`), run against the real scripts: tool surface, refused flags, path confinement (including a symlink), tool annotations, argument
+26 tests (20 server + 5 alignment with the skill's `references/mcp-tools.md`), run against the real scripts: tool surface, refused flags, path confinement (including a symlink), tool annotations, argument
 checks, real manifest/plan/log cases, and the submission gate (the command that `mima_prepare_submission` returns is run
 without a terminal, with a working fake `qsub`, and must refuse and write no record).
 Tested with fastmcp 4.1.0 on Python 3.13.
@@ -66,7 +66,15 @@ data they use (default `/tmp/mima_eval`); `evals/verify_answers.py` recomputes e
     MIMA_SKILL_DIR=/path/to/agentic-mima python3 evals/verify_answers.py     # all 10 should print ok
 
 `verify_answers.py` shows the questions are answerable with these tools. It does NOT show that a model can do it. To measure that,
-run mcp-builder's `scripts/evaluation.py` (needs an Anthropic API key, not used here) with the server as a stdio command.
+run the questions through a model. Either use mcp-builder's `scripts/evaluation.py` (needs an Anthropic API key, not used here), or
+`evals/run_llm_eval.py`, which works with any OpenAI-compatible endpoint that supports tool calling (for example vLLM started with
+`--enable-auto-tool-choice` and the tool-call parser for that model). It calls the tools in-process, withholds
+`mima_prepare_submission`, scores each answer by string comparison and writes full transcripts:
+
+    python3 evals/make_eval_data.py $HOME/mima_eval
+    python3 evals/run_llm_eval.py --base-url http://HOST:8000/v1 --model NAME --data-dir $HOME/mima_eval --out results.json
+
+The data folder must be inside `MIMA_ALLOWED_ROOTS`. A first run through Antigravity 2.0 scored 10/10 (one run, questions written by Claude).
 
 ## Design review against mcp-builder (2026-10-14)
 
