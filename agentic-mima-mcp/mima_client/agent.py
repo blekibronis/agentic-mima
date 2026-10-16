@@ -6,7 +6,7 @@ import json
 import time
 from pathlib import Path
 
-from .llm import post, result_text, tool_specs
+from .llm import LLMError, post, result_text, tool_specs
 
 SUBMISSION_TOOL = "mima_prepare_submission"
 WRITE_TOOL = "mima_write_prepared_inputs"
@@ -73,6 +73,7 @@ class Agent:
         skill_md = (self.skill_dir / "SKILL.md").read_text()
         self.messages = [{"role": "system", "content": PREFACE + skill_md}]
         self.transcript = Path(transcript) if transcript else None
+        self.used = 0  # tokens the server reported for the conversation after its last reply
         self._log({"event": "start", "model": model, "tools": sorted(self.names), "skill_chars": len(skill_md)})
 
     def _log(self, rec):
@@ -82,10 +83,12 @@ class Agent:
                 f.write(json.dumps(rec, default=str) + "\n")
 
     def _tokens(self):
-        return len(json.dumps(self.messages, default=str)) // 3.5
+        """The larger of the server's own count after its last reply and a rough estimate (3.5 characters per token)."""
+        return max(self.used, len(json.dumps(self.messages, default=str)) // 3.5)
 
     def reset(self):
         self.messages = self.messages[:1]
+        self.used = 0
 
     async def _call(self, name, args):
         if name == READ_TOOL:
@@ -101,17 +104,29 @@ class Agent:
 
     async def turn(self, user_text):
         """One user message -> the model's final reply (after any number of tool calls)."""
-        if self._tokens() > 0.95 * self.context_tokens:
-            return "[client] The conversation is about to exceed the model's context window. Use /reset to start again."
-        if self._tokens() > 0.75 * self.context_tokens:
-            self.say("[client] warning: about %d of %d tokens used" % (self._tokens(), self.context_tokens))
         self.messages.append({"role": "user", "content": user_text})
         self._log({"event": "user", "content": user_text})
+        warned = False
         for _ in range(self.max_steps):
+            if self._tokens() > 0.95 * self.context_tokens:
+                return "[client] The conversation is about to exceed the model's context window (about %d of %d tokens). Use /reset to start again." % (self._tokens(), self.context_tokens)
+            if self._tokens() > 0.75 * self.context_tokens and not warned:
+                warned = True
+                self.say("[client] warning: about %d of %d tokens used" % (self._tokens(), self.context_tokens))
             body = {"model": self.model, "messages": self.messages, "tools": self.specs, "tool_choice": "auto"}
             if self.temperature is not None:
                 body["temperature"] = self.temperature
-            msg = post(self.url, body, self.api_key, self.timeout)["choices"][0]["message"]
+            try:
+                reply = post(self.url, body, self.api_key, self.timeout)
+                msg = reply["choices"][0]["message"]
+            except LLMError as e:
+                self._log({"event": "error", "detail": str(e)})
+                return "[client] The model request failed and nothing was lost: %s\nSend your message again, or use /reset." % e
+            except (KeyError, IndexError, TypeError):
+                self._log({"event": "error", "detail": "unexpected reply shape", "reply": reply})
+                return "[client] The model server's reply had no message in it. Send your message again, or use /reset."
+            usage = reply.get("usage") or {}
+            self.used = usage.get("total_tokens") or usage.get("prompt_tokens") or self.used
             keep = {k: v for k, v in msg.items() if v is not None and (self.keep_reasoning or k not in DROP_KEYS)}
             self.messages.append(keep)
             self._log({"event": "assistant", "message": msg})
