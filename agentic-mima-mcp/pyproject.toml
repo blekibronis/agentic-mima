@@ -7,3 +7,6 @@ dependencies = ["fastmcp>=2.0"]
 
 [project.scripts]
 agentic-mima-mcp = "mima_mcp.server:main"
+
+[tool.setuptools]
+packages = ["mima_mcp", "mima_client"]

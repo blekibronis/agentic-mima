@@ -90,7 +90,7 @@ agentic-mima/            the skill (what Claude loads)
   scripts/               builder, validators, submission gate, monitors, log scanner (Python, stdlib only)
   references/            parameters, lab defaults, troubleshooting, interpretation, MCP tool mapping
   assets/                plan and report templates
-agentic-mima-mcp/        optional MCP server that exposes the scripts as tools (FastMCP)
+agentic-mima-mcp/        optional MCP server that exposes the scripts as tools (FastMCP), plus a small client for locally hosted models
 agentic-mima-tests/      test kit: 110 automated tests, conversation tests, trigger queries
 ```
 
@@ -122,7 +122,7 @@ python3 run_tests.py                    # 110 tests; needs Python 3.8 or later
 
 ```bash
 cd agentic-mima-mcp
-python -m unittest discover -s tests    # 26 tests; needs Python 3.10 or later and fastmcp
+python -m unittest discover -s tests    # 31 tests; needs Python 3.10 or later and fastmcp
 ```
 
 A pass shows that the scripts behave as designed on mock inputs and that the skill's files are consistent. It does not show that Claude follows the instructions in a conversation; use `agentic-mima-tests/conversation_tests.md` and `trigger_queries.md` for that.

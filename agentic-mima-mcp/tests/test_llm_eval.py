@@ -56,6 +56,7 @@ class RunnerTest(unittest.TestCase):
                 res = json.loads(out.read_text())
         finally:
             srv.shutdown()
+            srv.server_close()
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)  # second answer is wrong on purpose
         self.assertEqual((res["score"], res["total"]), (1, 2))
         self.assertTrue(res["results"][0]["correct"])  # "`9`." counts as 9

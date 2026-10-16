@@ -52,10 +52,26 @@ Client over SSH (UNTESTED; shown as the intended shape; needs non-interactive SS
 
     MIMA_SKILL_DIR=/path/to/agentic-mima python3 -m unittest discover -s tests -v
 
-26 tests (20 server + 5 alignment with the skill's `references/mcp-tools.md`), run against the real scripts: tool surface, refused flags, path confinement (including a symlink), tool annotations, argument
+31 tests (20 server + 5 alignment with the skill's `references/mcp-tools.md`), run against the real scripts: tool surface, refused flags, path confinement (including a symlink), tool annotations, argument
 checks, real manifest/plan/log cases, and the submission gate (the command that `mima_prepare_submission` returns is run
 without a terminal, with a working fake `qsub`, and must refuse and write no record).
 Tested with fastmcp 4.1.0 on Python 3.13.
+
+## Client for locally hosted models (`mima_client`)
+
+Antigravity and Claude clients load tools and skills themselves. A model served by vLLM (for example Kimi-K3 on Gadi) needs a
+client, so `mima_client` is a small one. It talks to any OpenAI-compatible endpoint that supports tool calling, calls the server's
+tools in-process, and puts the skill's `SKILL.md` in the model's instructions. A tool `skill_read_file` lets the model read the
+skill's `references/` and `assets/` files on demand (nothing else; paths are confined), which replaces the file reading a Claude
+client would do for itself. It cannot submit: `mima_prepare_submission` is a dry run, and each call needs your typed yes.
+Without a terminal the call is denied. Every message, tool call and result is saved to a JSONL transcript.
+
+    export MIMA_SKILL_DIR=$HOME/agentic-mima-repo/agentic-mima
+    export MIMA_ALLOWED_ROOTS=$HOME:/scratch/mp96
+    python -m mima_client --base-url http://HOST:8000/v1 --model kimi-k3
+    python -m mima_client --base-url ... --model ... --prompt-file turns.txt     # user turns separated by a line with ---
+
+Commands in the chat: `/reset`, `/quit`. Tested against a scripted endpoint only (`tests/test_agent.py`); not yet used with a real model.
 
 ## Evaluation (mcp-builder Phase 4)
 

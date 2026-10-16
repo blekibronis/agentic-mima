@@ -22,12 +22,12 @@ import json
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mima_client.llm import post, result_text, tool_specs  # noqa: E402
 
 SYSTEM = (
     "You answer questions about metagenomics files using ONLY the mima_* tools you are given. "
@@ -38,19 +38,6 @@ SYSTEM = (
 )
 
 
-def post(url, payload, api_key, timeout):
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(), method="POST",
-        headers={"Content-Type": "application/json", "Authorization": "Bearer " + (api_key or "none")})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
-        raise SystemExit("HTTP %s from %s: %s" % (e.code, url, e.read().decode(errors="replace")[:600]))
-    except urllib.error.URLError as e:
-        raise SystemExit("Cannot reach %s: %s" % (url, e.reason))
-
-
 def norm(s):
     return (s or "").strip().strip("`'\". *").lower()
 
@@ -58,28 +45,6 @@ def norm(s):
 def extract_answer(text):
     found = re.findall(r"^\s*ANSWER:\s*(.+?)\s*$", text or "", flags=re.M | re.I)
     return found[-1] if found else None
-
-
-def tool_specs(tools, allow_prepare):
-    out = []
-    for t in tools:
-        if t.name == "mima_prepare_submission" and not allow_prepare:
-            continue
-        out.append({"type": "function", "function": {
-            "name": t.name, "description": t.description or "",
-            "parameters": getattr(t, "input_schema", None) or getattr(t, "inputSchema", None)
-                          or {"type": "object", "properties": {}}}})
-    return out
-
-
-def result_text(res, limit):
-    data = getattr(res, "structured_content", None)
-    if data is None:
-        data = getattr(res, "data", None)
-    if data is None:
-        data = "".join(getattr(c, "text", "") for c in (res.content or []))
-    text = data if isinstance(data, str) else json.dumps(data, default=str)
-    return text if len(text) <= limit else text[:limit] + "\n[cut by the evaluation runner at %d characters]" % limit
 
 
 async def run(args):
@@ -101,7 +66,7 @@ async def run(args):
     url = args.base_url.rstrip("/") + "/chat/completions"
     report, correct = [], 0
     async with Client(mcp) as client:
-        specs = tool_specs(await client.list_tools(), args.allow_prepare_submission)
+        specs = tool_specs(await client.list_tools(), () if args.allow_prepare_submission else ("mima_prepare_submission",))
         print("tools offered: %d" % len(specs))
         for num, q, expected in questions:
             msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": q}]
