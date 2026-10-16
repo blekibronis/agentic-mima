@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from mima_client.llm import post, result_text, tool_specs  # noqa: E402
+from mima_client.llm import LLMError, post, result_text, tool_specs  # noqa: E402
 
 SYSTEM = (
     "You answer questions about metagenomics files using ONLY the mima_* tools you are given. "
@@ -74,7 +74,11 @@ async def run(args):
             for step in range(args.max_steps):
                 body = {"model": args.model, "messages": msgs, "tools": specs,
                         "tool_choice": "auto", "temperature": args.temperature}
-                reply = post(url, body, args.api_key, args.timeout)["choices"][0]["message"]
+                try:
+                    reply = post(url, body, args.api_key, args.timeout)["choices"][0]["message"]
+                except (LLMError, KeyError, IndexError) as e:
+                    note = "model request failed: %s" % e
+                    break
                 msgs.append({k: v for k, v in reply.items() if v is not None})
                 calls = reply.get("tool_calls") or []
                 if not calls:
@@ -99,6 +103,8 @@ async def run(args):
                     msgs.append({"role": "tool", "tool_call_id": c.get("id", name), "content": out})
             else:
                 note = "no final answer within %d steps" % args.max_steps
+            if note.startswith("model request failed"):
+                final = None
             got = extract_answer(final)
             ok = got is not None and norm(got) == norm(expected)
             correct += ok

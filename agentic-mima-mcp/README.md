@@ -54,10 +54,22 @@ Client over SSH (UNTESTED; shown as the intended shape; needs non-interactive SS
 
     MIMA_SKILL_DIR=/path/to/agentic-mima python3 -m unittest discover -s tests -v
 
-35 tests (24 server + 5 alignment with the skill's `references/mcp-tools.md`), run against the real scripts: tool surface, refused flags, path confinement (including a symlink), tool annotations, argument
+44 tests (24 server + 5 alignment with the skill's `references/mcp-tools.md`), run against the real scripts: tool surface, refused flags, path confinement (including a symlink), tool annotations, argument
 checks, real manifest/plan/log cases, and the submission gate (the command that `mima_prepare_submission` returns is run
 without a terminal, with a working fake `qsub`, and must refuse and write no record).
 Tested with fastmcp 4.1.0 on Python 3.13.
+
+## Before a run with a real model
+
+    bash mima-client-start.sh preflight --base-url http://HOST:8000/v1 --model NAME
+
+`mima_client.preflight` makes four short model calls and no cluster work. It checks that the server lists the model, how many
+tokens the fixed instructions and tool list use, that the model makes a well-formed tool call and passes a nested plan
+object, and which extra fields (for example reasoning) its replies carry. It ends with `RESULT: READY` or `NOT READY`.
+`mima-client-start.sh` sets `MIMA_SKILL_DIR` and `MIMA_ALLOWED_ROOTS` and activates the venv, then starts the client.
+The client sends tool schemas with the optional-argument `null` branches removed (some local chat templates cope badly with
+`anyOf`), tracks the server's own token count, stops a turn before the context window overflows, and reports a failed model
+request instead of exiting.
 
 ## Client for locally hosted models (`mima_client`)
 
