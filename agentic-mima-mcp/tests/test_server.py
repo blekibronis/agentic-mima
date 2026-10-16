@@ -342,11 +342,15 @@ class TestHeaderTools(unittest.TestCase):
         again = call("mima_write_pbs_header", self.args(out_file=str(out)))
         self.assertEqual(again["status"], "needs_input")  # never overwrites
 
-    def test_missing_facts_and_other_modules_are_questions(self):
+    def test_missing_facts_are_questions_and_every_module_is_sized(self):
         r = call("mima_plan_pbs_header", {"module": "taxa", "samples": 3})
         self.assertEqual(r["status"], "needs_input")
         self.assertTrue(r["data"]["needs_input"])
-        self.assertEqual(call("mima_plan_pbs_header", self.args(module="qc"))["status"], "needs_input")
+        q = call("mima_plan_pbs_header", self.args(module="qc", num_pbs_jobs=2))
+        self.assertEqual(q["status"], "prepared", q)
+        self.assertIn("#PBS -N mima-qc", [x["line"] for x in q["data"]["lines"]])
+        f = call("mima_plan_pbs_header", self.args(module="func"))
+        self.assertIn("#PBS -N mima-func", [x["line"] for x in f["data"]["lines"]])
 
     def test_arguments_are_checked(self):
         self.assertIn("outside the allowed folders", call_error("mima_write_pbs_header", self.args(out_file="/etc/h.cfg")))

@@ -30,6 +30,8 @@ Approved: `/g/data/mp96/REFDB/GTDB_Kraken` (GTDB r95) for bacterial and archaeal
 | CPUs | 16 to 28 |
 | Walltime | 20 minutes per sample (15M to 20M read pairs on 28 cores) plus 1 hour. For example 10 samples need 4:20 and 30 samples need 11:00. Recommended: 1.5 times the per-sample estimate when that is longer, because a killed job wastes the queue wait |
 
+QC and function profiling have no lab sizing. For the prototype, `make_pbs_header.py` takes the tutorial's figures as estimates: QC 8 CPUs, 64 GB and 40 minutes per sample (the tutorial runs 3 samples per job in 2 hours); function profiling 8 CPUs, 64 GB and 8 hours per sample (the module's own default is 24 hours). Walltime is scaled up when the largest sample's gzipped read files exceed 5 GB (a rough assumption for about 20M read pairs of 2x150), times a 1.5 margin, capped at 48 hours. These are uncalibrated and unreviewed by the supervisor.
+
 The 20 minutes is the project owner's figure and has not been measured by this skill. Calibrate it on the first real run. Check the queue's memory and walltime limits on the cluster. `validate_pbs_config.py --module taxa --samples N` applies this guideline.
 
 ## Group size and design
