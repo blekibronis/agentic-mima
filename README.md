@@ -4,7 +4,7 @@ A [Claude Agent Skill](https://docs.claude.com/en/docs/agents-and-tools/agent-sk
 
 It is built for the **MIMA Apptainer container** (`mima4_v2.0.0`) on an **OpenPBS** cluster. It was developed on [NCI Gadi](https://opus.nci.org.au/display/Help/0.+Welcome+to+Gadi).
 
-> **Status: v0.4.0, pre-release.** The scripts are tested and have been run on Gadi, but no complete pipeline run has been driven end to end through the skill yet. See [What has and has not been verified](#what-has-and-has-not-been-verified) before relying on it.
+> **Status: v0.4.1, pre-release.** The scripts are tested and have been run on Gadi, but no complete pipeline run has been driven end to end through the skill yet. See [What has and has not been verified](#what-has-and-has-not-been-verified) before relying on it.
 
 ## What it does
 
@@ -133,7 +133,7 @@ A pass shows that the scripts behave as designed on mock inputs and that the ski
 
 - The scripts run on Gadi's Python 3.6.8 with the current files: manifest, metadata, PBS config and PBS script validation, command building (good plans accepted, bad plans refused), read-length estimation, QC output checks, log scanning and job-status reading.
 - 123 automated tests pass. A static check confirms the scripts use only Python 3.6 features.
-- The MCP server's 35 tests (v0.4.0) pass on Gadi (Python 3.12.1, fastmcp 4.1.0), and the 10 evaluation questions recompute correctly by direct tool calls.
+- The MCP server's 35 tests (v0.4.1) pass on Gadi (Python 3.12.1, fastmcp 4.1.0), and the 10 evaluation questions recompute correctly by direct tool calls.
 - A language model (Antigravity 2.0, model not recorded) answered all 10 evaluation questions correctly through the server on Gadi, using `mima_validate_manifest`, `mima_validate_metadata`, `mima_estimate_read_length`, `mima_scan_logs`, `mima_check_outputs`, `mima_validate_pbs_config` and `mima_build_commands`. One run, on synthetic data, with questions written by Claude: it shows the tool descriptions are usable, not that the tools meet the lab's needs.
 - An MCP client (Antigravity 2.0) connected to the server on Gadi over SSH and listed 11 tools. Through it, six read-only tools returned the same results as the command-line scripts on real Gadi data: `mima_list_modules`, `mima_validate_manifest`, `mima_scan_logs`, `mima_check_outputs` (including its short summary), `mima_check_job_status` (a finished job aged out of history is reported as unresolved), and a path outside the allowed folders was refused.
 
