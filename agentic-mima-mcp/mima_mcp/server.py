@@ -18,7 +18,7 @@ import shlex
 import sys
 import tempfile
 from pathlib import Path
-from typing import Annotated, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -40,7 +40,7 @@ mcp = FastMCP(
         "Tools for planning, validating and checking MIMA shotgun-metagenomics runs on a PBS cluster. "
         "All tools are read-only except mima_prepare_submission (writes a plan file and does a dry run) and "
         "mima_write_prepared_inputs (writes corrected COPIES of the user's manifest and metadata into a new folder; "
-        "the originals are never changed). "
+        "the originals are never changed) and mima_write_pbs_header (writes a NEW PBS header file; never overwrites). "
         "Nothing here submits a job: a person runs the command that mima_prepare_submission returns. "
         "Every result has a 'status'; report it as returned and do not guess when it is not ok/valid/complete."
     ),
@@ -304,6 +304,83 @@ async def mima_write_prepared_inputs(
     needs_input when any question is open. Returns status prepared (data.written lists the files; use data.use afterwards),
     unchanged, needs_input or unreadable. Then run the validators on the files you will use."""
     return await run_json_script("prepare_inputs", _prepare_args(manifest_path, from_reads_dir, reads_dir, metadata_path, out_dir, True))
+
+
+def _header_args(a):
+    args = ["--module", check_token(a["module"], "module")]
+    if a.get("samples"):
+        args += ["--samples", str(int(a["samples"]))]
+    if a.get("manifest_path"):
+        args += ["--manifest", check_path(a["manifest_path"], "manifest_path")]
+    if a.get("image_path"):
+        args += ["--image", check_path(a["image_path"], "image_path")]
+    for p in a.get("paths") or []:
+        args += ["--path", check_path(p, "paths")]
+    if a.get("project"):
+        args += ["--project", check_token(a["project"], "project")]
+    if a.get("queue"):
+        args += ["--queue", check_token(a["queue"], "queue")]
+    if a.get("cpus"):
+        args += ["--cpus", str(int(a["cpus"]))]
+    if a.get("out_file"):
+        args += ["--out", check_path(a["out_file"], "out_file")]
+    return args
+
+
+_HDR_MODULE = Annotated[str, Field(description="Module to size. Only 'taxa' has a sizing rule; qc and func return needs_input.", max_length=20)]
+_HDR_SAMPLES = Annotated[Optional[int], Field(description="Number of samples. Give this OR manifest_path (use the prepared manifest).", ge=1, le=5000)]
+_HDR_MANIFEST = Annotated[Optional[str], Field(description="The prepared manifest.csv, used only to count the samples", max_length=1024)]
+_HDR_IMAGE = Annotated[Optional[str], Field(description="Absolute path of the MIMA container image (.sif). Ask the user; never guess it.", max_length=1024)]
+_HDR_PATHS = Annotated[Optional[List[str]], Field(description="Every absolute folder the job reads or writes: clean reads, output folder, reference database. Storage and bind paths are derived from these.", max_length=20)]
+_HDR_PROJECT = Annotated[Optional[str], Field(description="The user's project code, such as ab01. Ask the user unless $PROJECT is set on the server.", max_length=32)]
+_HDR_QUEUE = Annotated[Optional[str], Field(description="Queue name, only if the user knows it", max_length=40)]
+_HDR_CPUS = Annotated[Optional[int], Field(description="CPU count; default 28, the guideline is 16 to 28", ge=1, le=256)]
+_HDR_OUT = Annotated[Optional[str], Field(description="A NEW header file to write, e.g. in the run folder; an existing file is never overwritten", max_length=1024)]
+
+
+@_tool("mima_plan_pbs_header", "Draft the PBS header file for the taxonomy module (writes nothing)")
+async def mima_plan_pbs_header(
+    module: _HDR_MODULE,
+    samples: _HDR_SAMPLES = None,
+    manifest_path: _HDR_MANIFEST = None,
+    image_path: _HDR_IMAGE = None,
+    paths: _HDR_PATHS = None,
+    project: _HDR_PROJECT = None,
+    queue: _HDR_QUEUE = None,
+    cpus: _HDR_CPUS = None,
+) -> dict:
+    """Draft the PBS header (memory, CPUs, walltime, storage line, bind paths) so the user does not have to write one. WRITES NOTHING.
+
+    Sized from the number of samples with the lab's taxonomy guideline. The numbers are the lab's ESTIMATES, not measured values:
+    say so, and show the user data.lines (each line with its source) and data.warnings. The project code, image path and folders
+    must come from the user; if any is missing the status is needs_input and data.needs_input lists the questions: ask them, never guess.
+    qc and func have no lab sizing rule and return needs_input. Returns prepared (the draft passed validate_pbs_config; show it and
+    ask before writing), needs_input, or invalid (a bug: report it, do not use the draft)."""
+    return await run_json_script("make_pbs_header", _header_args(dict(
+        module=module, samples=samples, manifest_path=manifest_path, image_path=image_path, paths=paths, project=project, queue=queue, cpus=cpus)))
+
+
+@_tool("mima_write_pbs_header", "Write the drafted PBS header to a new file", WRITES_COPIES)
+async def mima_write_pbs_header(
+    module: _HDR_MODULE,
+    out_file: Annotated[str, Field(description="A NEW header file to write, e.g. in the run folder; an existing file is never overwritten", min_length=2, max_length=1024)],
+    samples: _HDR_SAMPLES = None,
+    manifest_path: _HDR_MANIFEST = None,
+    image_path: _HDR_IMAGE = None,
+    paths: _HDR_PATHS = None,
+    project: _HDR_PROJECT = None,
+    queue: _HDR_QUEUE = None,
+    cpus: _HDR_CPUS = None,
+) -> dict:
+    """Write the header that mima_plan_pbs_header drafted. Call only after the user has seen the draft and said yes, with exactly the
+    same arguments plus out_file.
+
+    Creates out_file (it must not exist; nothing is overwritten) with Unix line endings. Writes nothing unless the draft passed
+    validation. Returns prepared (data.written is the file; pass it as --pbs-config), needs_input or invalid. Then run
+    mima_validate_pbs_config on it."""
+    return await run_json_script("make_pbs_header", _header_args(dict(
+        module=module, samples=samples, manifest_path=manifest_path, image_path=image_path, paths=paths, project=project, queue=queue,
+        cpus=cpus, out_file=out_file)) + ["--apply"])
 
 
 @_tool("mima_prepare_submission", "Prepare a job submission (does not submit)", WRITES_PLAN)

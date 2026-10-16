@@ -10,7 +10,8 @@ from .llm import LLMError, post, result_text, tool_specs
 
 SUBMISSION_TOOL = "mima_prepare_submission"
 WRITE_TOOL = "mima_write_prepared_inputs"
-GATED = (SUBMISSION_TOOL, WRITE_TOOL)  # each call needs a person's yes
+HEADER_TOOL = "mima_write_pbs_header"
+GATED = (SUBMISSION_TOOL, WRITE_TOOL, HEADER_TOOL)  # each call needs a person's yes
 READ_TOOL = "skill_read_file"
 READABLE_DIRS = ("references", "assets")
 READ_LIMIT = 40000

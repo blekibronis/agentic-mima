@@ -1016,6 +1016,90 @@ class TestPrepareInputs(unittest.TestCase):
         self.assertIn("underscores", text)
 
 
+class TestMakePbsHeader(unittest.TestCase):
+    """make_pbs_header.py: drafts the taxonomy header from the data; guesses nothing the user must supply."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.out = self.tmp / "pbs_header_taxa.cfg"
+        self.env = {k: v for k, v in os.environ.items() if k != "PROJECT"}
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def hdr(self, *args, env=None):
+        code, text = run("make_pbs_header.py", *args, "--format", "json", env=env or self.env)
+        return code, json.loads(text)
+
+    def good(self, samples=10, *extra):
+        return ["--module", "taxa", "--samples", samples, "--image", "/g/data/ab01/mima.sif", "--project", "ab01",
+                "--path", "/scratch/ab01/u/run", "--path", "/scratch/ab01/u/run/CleanReads", "--path", "/g/data/ab01/REFDB/GTDB_Kraken", *extra]
+
+    def test_dry_run_writes_nothing_and_sizes_from_the_sample_count(self):
+        code, d = self.hdr(*self.good(10), "--out", self.out)
+        self.assertEqual((code, d["status"], d["applied"]), (0, "prepared", False))
+        self.assertFalse(self.out.exists())
+        lines = [x["line"] for x in d["lines"]]
+        self.assertIn("#PBS -l walltime=5:00:00", lines)  # (20 x 10 = 200 min) x 1.5
+        self.assertIn("#PBS -l mem=320GB", lines)
+        self.assertIn("#PBS -l storage=gdata/ab01+scratch/ab01", lines)
+        self.assertIn('export APPTAINER_BIND="/g/data/ab01/REFDB/GTDB_Kraken:/g/data/ab01/REFDB/GTDB_Kraken,/scratch/ab01/u/run:/scratch/ab01/u/run"', lines)
+        self.assertTrue(all(x["source"] for x in d["lines"] if x["line"].startswith("#PBS -l")), "every resource line says where it came from")
+        self.assertTrue(any("NOT measured" in x["source"] for x in d["lines"]))
+        self.assertTrue(any("estimates" in w for w in d["warnings"]))
+
+    def test_written_file_is_new_unix_and_passes_the_validator_without_warnings(self):
+        for n in (1, 2, 10, 30, 100):
+            out = self.tmp / ("h%d.cfg" % n)
+            code, d = self.hdr(*self.good(n), "--queue", "hugemem", "--out", out, "--apply")
+            self.assertEqual((code, d["status"], d["written"]), (0, "prepared", str(out)), d)
+            self.assertNotIn(b"\r", out.read_bytes())
+            vcode, text = run("validate_pbs_config.py", out, "--module", "taxa", "--samples", n)
+            self.assertEqual(vcode, 0, text)
+            self.assertNotIn("WARN", text)
+            self.assertNotIn("NOTE", text)
+
+    def test_never_overwrites(self):
+        self.out.write_text("mine\n")
+        code, d = self.hdr(*self.good(3), "--out", self.out, "--apply")
+        self.assertEqual((code, d["status"]), (1, "needs_input"))
+        self.assertEqual(self.out.read_text(), "mine\n")
+
+    def test_missing_user_facts_are_asked_not_guessed(self):
+        code, d = self.hdr("--module", "taxa", "--samples", 4)
+        self.assertEqual((code, d["status"]), (1, "needs_input"))
+        text = " ".join(d["needs_input"])
+        for word in ("project", "container image", "folders"):
+            self.assertIn(word, text)
+        self.assertEqual(d["lines"], [])
+        env = dict(self.env, PROJECT="ab01")  # $PROJECT is a real source, so it is used
+        code, d = self.hdr(*[x for x in self.good(4) if x not in ("--project", "ab01")], env=env)
+        self.assertEqual(d["status"], "prepared", d)
+
+    def test_unmapped_storage_and_other_modules_are_refused(self):
+        code, d = self.hdr("--module", "taxa", "--samples", 2, "--image", "/a.sif", "--project", "ab01", "--path", "/tmp/data")
+        self.assertEqual(d["status"], "needs_input")
+        self.assertIn("storage", " ".join(d["needs_input"]))
+        for module in ("qc", "func"):
+            code, d = self.hdr("--module", module, "--samples", 2, "--image", "/a.sif", "--project", "ab01", "--path", "/scratch/ab01/x")
+            self.assertEqual((code, d["status"], d["lines"]), (1, "needs_input", []))
+            self.assertIn("no sizing rule", d["needs_input"][0])
+
+    def test_samples_counted_from_a_crlf_manifest(self):
+        m = self.tmp / "manifest.csv"
+        m.write_bytes(b"\xef\xbb\xbfsample,read1,read2\r\nA,a_1.fq.gz,a_2.fq.gz\r\nB,b_1.fq.gz,b_2.fq.gz\r\n\r\n")
+        args = [x for x in self.good(1)]
+        i = args.index("--samples")
+        code, d = self.hdr(*(args[:i] + args[i + 2:]), "--manifest", m)
+        self.assertEqual((d["status"], d["samples"]), ("prepared", 2))
+
+    def test_unsafe_values_are_refused(self):
+        code, d = self.hdr(*self.good(3), "--queue", "x;rm -rf")
+        self.assertEqual(d["status"], "needs_input")
+        code, d = self.hdr("--module", "taxa", "--samples", 3, "--image", "/a b.sif", "--project", "ab01", "--path", "/scratch/ab01/x")
+        self.assertEqual(d["status"], "needs_input")
+
+
 class TestSkillConsistency(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

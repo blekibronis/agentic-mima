@@ -31,9 +31,10 @@ STATUS = {
     "check_report": {0: "ok", 1: "errors", 2: "unreadable"},
     "submit_jobs": {0: "dry_run_ok", 1: "invalid", 2: "bad_plan"},
     "prepare_inputs": {0: "prepared", 1: "needs_input", 2: "unreadable"},
+    "make_pbs_header": {0: "prepared", 1: "needs_input", 2: "unreadable"},
 }
-# Scripts whose JSON says more than their exit code can: the script's own status word is used (prepared or unchanged).
-STATUS_FROM_DATA = {"prepare_inputs"}
+# Scripts whose JSON says more than their exit code can: the script's own status word is used (prepared, unchanged or invalid).
+STATUS_FROM_DATA = {"prepare_inputs", "make_pbs_header"}
 REFUSED_FLAGS = {"submit_jobs": {"--execute", "--confirm", "--approval", "--allow-resubmit", "--qsub"}}
 MAX_OUTPUT = 60_000  # characters; keeps one tool result from flooding the model's context
 log = logging.getLogger("mima_mcp")  # stderr only: stdout belongs to the MCP protocol
