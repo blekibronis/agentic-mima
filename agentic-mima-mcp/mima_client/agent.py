@@ -1,0 +1,140 @@
+"""Agent loop: the skill's SKILL.md as instructions, the mima_* MCP tools, and a reader for the skill's reference files.
+
+Safety: the model cannot submit jobs. mima_prepare_submission only does a dry run, and each call needs a person's yes.
+"""
+import json
+import time
+from pathlib import Path
+
+from .llm import post, result_text, tool_specs
+
+SUBMISSION_TOOL = "mima_prepare_submission"
+READ_TOOL = "skill_read_file"
+READABLE_DIRS = ("references", "assets")
+READ_LIMIT = 40000
+DROP_KEYS = ("reasoning_content", "reasoning")
+
+PREFACE = (
+    "You are the agentic-mima assistant, running in Cluster mode through the project's MCP server on the cluster login node.\n"
+    "The tools named mima_* are the MCP tools described in references/mcp-tools.md. You have no shell. The only way to read the "
+    "skill's own files is the tool skill_read_file (files in references/ and assets/). Where the skill tells you to run a script, "
+    "call the matching mima_* tool; where it tells you to read a reference file, call skill_read_file. Always pass absolute paths "
+    "to mima_* tools.\n"
+    "You cannot submit jobs. mima_prepare_submission only performs a dry run; the person types the confirmation at a terminal. "
+    "If a step needs something you do not have, say so instead of guessing.\n"
+    "The skill follows. Follow it exactly.\n\n=== SKILL.md ===\n"
+)
+
+
+def read_skill_file(skill_dir, rel):
+    """Return (ok, text). Only .md and .json files inside references/ and assets/ can be read."""
+    skill = Path(skill_dir).resolve()
+    try:
+        p = (skill / str(rel)).resolve()
+    except (OSError, ValueError):
+        return False, "Invalid path."
+    allowed = [(skill / d).resolve() for d in READABLE_DIRS]
+    if not any(a == p.parent or a in p.parents for a in allowed) or p.suffix not in (".md", ".json") or not p.is_file():
+        return False, "Not readable. Use a path such as references/mcp-tools.md. Available: " + ", ".join(list_skill_files(skill))
+    text = p.read_text(errors="replace")
+    if len(text) > READ_LIMIT:
+        text = text[:READ_LIMIT] + "\n[cut at %d characters]" % READ_LIMIT
+    return True, text
+
+
+def list_skill_files(skill_dir):
+    skill = Path(skill_dir)
+    return sorted(str(f.relative_to(skill)) for d in READABLE_DIRS for f in (skill / d).glob("*") if f.suffix in (".md", ".json"))
+
+
+def read_tool_spec(skill_dir):
+    return {"type": "function", "function": {
+        "name": READ_TOOL,
+        "description": "Read one reference file of the agentic-mima skill (SKILL.md is already in your instructions). "
+                       "Available: " + ", ".join(list_skill_files(skill_dir)),
+        "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "e.g. references/mcp-tools.md"}},
+                       "required": ["path"]}}}
+
+
+class Agent:
+    def __init__(self, client, tools, skill_dir, base_url, model, approve, say=print, api_key="", temperature=None,
+                 max_steps=25, result_limit=12000, context_tokens=65536, timeout=600, transcript=None, keep_reasoning=False,
+                 enable_submission_tool=True):
+        self.client, self.skill_dir, self.model = client, Path(skill_dir), model
+        self.url = base_url.rstrip("/") + "/chat/completions"
+        self.approve, self.say, self.api_key, self.temperature = approve, say, api_key, temperature
+        self.max_steps, self.result_limit, self.timeout = max_steps, result_limit, timeout
+        self.context_tokens, self.keep_reasoning = context_tokens, keep_reasoning
+        hide = () if enable_submission_tool else (SUBMISSION_TOOL,)
+        self.specs = tool_specs(tools, hide) + [read_tool_spec(self.skill_dir)]
+        self.names = {s["function"]["name"] for s in self.specs}
+        skill_md = (self.skill_dir / "SKILL.md").read_text()
+        self.messages = [{"role": "system", "content": PREFACE + skill_md}]
+        self.transcript = Path(transcript) if transcript else None
+        self._log({"event": "start", "model": model, "tools": sorted(self.names), "skill_chars": len(skill_md)})
+
+    def _log(self, rec):
+        if self.transcript:
+            rec = dict(rec, t=time.strftime("%Y-%m-%dT%H:%M:%S"))
+            with self.transcript.open("a") as f:
+                f.write(json.dumps(rec, default=str) + "\n")
+
+    def _tokens(self):
+        return len(json.dumps(self.messages, default=str)) // 3.5
+
+    def reset(self):
+        self.messages = self.messages[:1]
+
+    async def _call(self, name, args):
+        if name == READ_TOOL:
+            return read_skill_file(self.skill_dir, args.get("path", ""))[1]
+        if name not in self.names:
+            return "No such tool: %s" % name
+        if name == SUBMISSION_TOOL and not self.approve(name, args):
+            return "Not approved by the person. Do not retry; tell them what you wanted to check and why."
+        try:
+            return result_text(await self.client.call_tool(name, args, raise_on_error=False), self.result_limit)
+        except Exception as e:  # a tool-side refusal is information for the model
+            return "Tool error: %s" % e
+
+    async def turn(self, user_text):
+        """One user message -> the model's final reply (after any number of tool calls)."""
+        if self._tokens() > 0.95 * self.context_tokens:
+            return "[client] The conversation is about to exceed the model's context window. Use /reset to start again."
+        if self._tokens() > 0.75 * self.context_tokens:
+            self.say("[client] warning: about %d of %d tokens used" % (self._tokens(), self.context_tokens))
+        self.messages.append({"role": "user", "content": user_text})
+        self._log({"event": "user", "content": user_text})
+        for _ in range(self.max_steps):
+            body = {"model": self.model, "messages": self.messages, "tools": self.specs, "tool_choice": "auto"}
+            if self.temperature is not None:
+                body["temperature"] = self.temperature
+            msg = post(self.url, body, self.api_key, self.timeout)["choices"][0]["message"]
+            keep = {k: v for k, v in msg.items() if v is not None and (self.keep_reasoning or k not in DROP_KEYS)}
+            self.messages.append(keep)
+            self._log({"event": "assistant", "message": msg})
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                return msg.get("content") or ""
+            for c in calls:
+                name = c["function"]["name"]
+                try:
+                    args = json.loads(c["function"].get("arguments") or "{}")
+                except ValueError:
+                    args = None
+                self.say("  -> %s %s" % (name, json.dumps(args)[:200]))
+                out = "Tool arguments were not valid JSON." if args is None else await self._call(name, args)
+                self.say("  <- %s" % _headline(out))
+                self._log({"event": "tool", "name": name, "args": args, "result": out})
+                self.messages.append({"role": "tool", "tool_call_id": c.get("id", name), "content": out})
+        return "[client] Stopped after %d tool steps without a final reply." % self.max_steps
+
+
+def _headline(text):
+    try:
+        d = json.loads(text)
+        if isinstance(d, dict) and "status" in d:
+            return "status=%s exit_code=%s (%d chars)" % (d.get("status"), d.get("exit_code"), len(text))
+    except ValueError:
+        pass
+    return "%d chars: %s" % (len(text), text[:100].replace("\n", " "))
