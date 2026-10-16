@@ -322,12 +322,16 @@ def _header_args(a):
         args += ["--queue", check_token(a["queue"], "queue")]
     if a.get("cpus"):
         args += ["--cpus", str(int(a["cpus"]))]
+    if a.get("reads_dir"):
+        args += ["--reads-dir", check_path(a["reads_dir"], "reads_dir")]
+    if a.get("num_pbs_jobs"):
+        args += ["--num-pbs-jobs", str(int(a["num_pbs_jobs"]))]
     if a.get("out_file"):
         args += ["--out", check_path(a["out_file"], "out_file")]
     return args
 
 
-_HDR_MODULE = Annotated[str, Field(description="Module to size. Only 'taxa' has a sizing rule; qc and func return needs_input.", max_length=20)]
+_HDR_MODULE = Annotated[str, Field(description="Module to size: qc, taxa or func (a value other than these is rejected)", max_length=20)]
 _HDR_SAMPLES = Annotated[Optional[int], Field(description="Number of samples. Give this OR manifest_path (use the prepared manifest).", ge=1, le=5000)]
 _HDR_MANIFEST = Annotated[Optional[str], Field(description="The prepared manifest.csv, used only to count the samples", max_length=1024)]
 _HDR_IMAGE = Annotated[Optional[str], Field(description="Absolute path of the MIMA container image (.sif). Ask the user; never guess it.", max_length=1024)]
@@ -335,10 +339,12 @@ _HDR_PATHS = Annotated[Optional[List[str]], Field(description="Every absolute fo
 _HDR_PROJECT = Annotated[Optional[str], Field(description="The user's project code, such as ab01. Ask the user unless $PROJECT is set on the server.", max_length=32)]
 _HDR_QUEUE = Annotated[Optional[str], Field(description="Queue name, only if the user knows it", max_length=40)]
 _HDR_CPUS = Annotated[Optional[int], Field(description="CPU count; default 28, the guideline is 16 to 28", ge=1, le=256)]
+_HDR_READS = Annotated[Optional[str], Field(description="Folder holding the FASTQ files named in the manifest (or the CleanReads folder). Used to scale qc and func walltime by file size.", max_length=1024)]
+_HDR_JOBS = Annotated[Optional[int], Field(description="qc only: the num_pbs_jobs that will be given to mima-qc (its default is 4)", ge=1, le=500)]
 _HDR_OUT = Annotated[Optional[str], Field(description="A NEW header file to write, e.g. in the run folder; an existing file is never overwritten", max_length=1024)]
 
 
-@_tool("mima_plan_pbs_header", "Draft the PBS header file for the taxonomy module (writes nothing)")
+@_tool("mima_plan_pbs_header", "Draft the PBS header file for a PBS module: qc, taxa or func (writes nothing)")
 async def mima_plan_pbs_header(
     module: _HDR_MODULE,
     samples: _HDR_SAMPLES = None,
@@ -348,16 +354,20 @@ async def mima_plan_pbs_header(
     project: _HDR_PROJECT = None,
     queue: _HDR_QUEUE = None,
     cpus: _HDR_CPUS = None,
+    reads_dir: _HDR_READS = None,
+    num_pbs_jobs: _HDR_JOBS = None,
 ) -> dict:
     """Draft the PBS header (memory, CPUs, walltime, storage line, bind paths) so the user does not have to write one. WRITES NOTHING.
 
-    Sized from the number of samples with the lab's taxonomy guideline. The numbers are the lab's ESTIMATES, not measured values:
+    Taxonomy is sized from the number of samples with the lab's guideline. QC and function profiling use the tutorial's figures
+    scaled by the largest sample's file size (give manifest_path and reads_dir). All numbers are ESTIMATES, not measured values:
     say so, and show the user data.lines (each line with its source) and data.warnings. The project code, image path and folders
     must come from the user; if any is missing the status is needs_input and data.needs_input lists the questions: ask them, never guess.
-    qc and func have no lab sizing rule and return needs_input. Returns prepared (the draft passed validate_pbs_config; show it and
+    Returns prepared (the draft passed validate_pbs_config; show it and
     ask before writing), needs_input, or invalid (a bug: report it, do not use the draft)."""
     return await run_json_script("make_pbs_header", _header_args(dict(
-        module=module, samples=samples, manifest_path=manifest_path, image_path=image_path, paths=paths, project=project, queue=queue, cpus=cpus)))
+        module=module, samples=samples, manifest_path=manifest_path, image_path=image_path, paths=paths, project=project, queue=queue, cpus=cpus,
+        reads_dir=reads_dir, num_pbs_jobs=num_pbs_jobs)))
 
 
 @_tool("mima_write_pbs_header", "Write the drafted PBS header to a new file", WRITES_COPIES)
@@ -371,6 +381,8 @@ async def mima_write_pbs_header(
     project: _HDR_PROJECT = None,
     queue: _HDR_QUEUE = None,
     cpus: _HDR_CPUS = None,
+    reads_dir: _HDR_READS = None,
+    num_pbs_jobs: _HDR_JOBS = None,
 ) -> dict:
     """Write the header that mima_plan_pbs_header drafted. Call only after the user has seen the draft and said yes, with exactly the
     same arguments plus out_file.
@@ -380,7 +392,7 @@ async def mima_write_pbs_header(
     mima_validate_pbs_config on it."""
     return await run_json_script("make_pbs_header", _header_args(dict(
         module=module, samples=samples, manifest_path=manifest_path, image_path=image_path, paths=paths, project=project, queue=queue,
-        cpus=cpus, out_file=out_file)) + ["--apply"])
+        cpus=cpus, reads_dir=reads_dir, num_pbs_jobs=num_pbs_jobs, out_file=out_file)) + ["--apply"])
 
 
 @_tool("mima_prepare_submission", "Prepare a job submission (does not submit)", WRITES_PLAN)

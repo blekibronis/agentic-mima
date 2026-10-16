@@ -1076,14 +1076,68 @@ class TestMakePbsHeader(unittest.TestCase):
         code, d = self.hdr(*[x for x in self.good(4) if x not in ("--project", "ab01")], env=env)
         self.assertEqual(d["status"], "prepared", d)
 
-    def test_unmapped_storage_and_other_modules_are_refused(self):
+    def test_unmapped_storage_is_asked(self):
         code, d = self.hdr("--module", "taxa", "--samples", 2, "--image", "/a.sif", "--project", "ab01", "--path", "/tmp/data")
         self.assertEqual(d["status"], "needs_input")
         self.assertIn("storage", " ".join(d["needs_input"]))
-        for module in ("qc", "func"):
-            code, d = self.hdr("--module", module, "--samples", 2, "--image", "/a.sif", "--project", "ab01", "--path", "/scratch/ab01/x")
-            self.assertEqual((code, d["status"], d["lines"]), (1, "needs_input", []))
-            self.assertIn("no sizing rule", d["needs_input"][0])
+
+    def reads(self, gb_per_file, names=("A", "B", "C")):
+        d = self.tmp / "reads"
+        d.mkdir(exist_ok=True)
+        rows = ["sample,read1,read2"]
+        for n in names:
+            for end in (1, 2):
+                with open(str(d / ("%s_%d.fq.gz" % (n, end))), "wb") as f:
+                    f.truncate(int(gb_per_file * 1024 ** 3))
+            rows.append("%s,%s_1.fq.gz,%s_2.fq.gz" % (n, n, n))
+        m = self.tmp / "manifest.csv"
+        m.write_text("\n".join(rows) + "\n")
+        return m, d
+
+    def sized(self, module, m, d, *extra):
+        return self.hdr("--module", module, "--manifest", m, "--reads-dir", d, "--image", "/g/data/ab01/m.sif", "--project", "ab01",
+                        "--path", "/scratch/ab01/run", "--path", "/g/data/ab01/ref", *extra)
+
+    def test_qc_and_func_are_sized_from_the_tutorial_and_the_file_sizes(self):
+        m, d = self.reads(1.0)  # 2 GB per sample, under the 5 GB reference
+        code, q = self.sized("qc", m, d, "--num-pbs-jobs", 1)
+        lines = [x["line"] for x in q["lines"]]
+        self.assertEqual((code, q["status"]), (0, "prepared"), q)
+        self.assertIn("#PBS -N mima-qc", lines)
+        self.assertIn("#PBS -l ncpus=8", lines)
+        self.assertIn("#PBS -l mem=64GB", lines)
+        self.assertIn("#PBS -l walltime=3:00:00", lines)  # 3 samples per job x 40 min x 1.5
+        code, q = self.sized("qc", m, d, "--num-pbs-jobs", 3)
+        self.assertIn("#PBS -l walltime=1:00:00", [x["line"] for x in q["lines"]])  # 1 sample per job: 60 min, the minimum
+        code, f = self.sized("func", m, d)
+        lines = [x["line"] for x in f["lines"]]
+        self.assertIn("#PBS -N mima-func", lines)
+        self.assertIn("#PBS -l walltime=12:00:00", lines)  # 8 h per sample x 1.5, one job per sample
+        self.assertTrue(any("NOT measured" in x["source"] for x in f["lines"]))
+
+    def test_bigger_files_get_more_time_and_there_is_a_cap(self):
+        m, d = self.reads(5.0)  # 10 GB per sample = 2x the reference
+        code, f = self.sized("func", m, d)
+        self.assertIn("#PBS -l walltime=24:00:00", [x["line"] for x in f["lines"]])
+        m, d = self.reads(20.0, ("A",))  # 40 GB: 8x, far over 48 h
+        code, f = self.sized("func", m, d)
+        self.assertIn("#PBS -l walltime=48:00:00", [x["line"] for x in f["lines"]])
+        self.assertTrue(any("capped" in w for w in f["warnings"]))
+
+    def test_unmeasured_files_use_the_reference_and_say_so(self):
+        code, f = self.hdr("--module", "func", "--samples", 4, "--image", "/g/data/ab01/m.sif", "--project", "ab01", "--path", "/scratch/ab01/run")
+        self.assertEqual(f["status"], "prepared", f)
+        self.assertIn("#PBS -l walltime=12:00:00", [x["line"] for x in f["lines"]])
+        self.assertTrue(any("could not measure" in w for w in f["warnings"]))
+
+    def test_every_module_header_passes_the_validator(self):
+        m, d = self.reads(1.0)
+        for module in ("qc", "func", "taxa"):
+            out = self.tmp / ("h_%s.cfg" % module)
+            code, r = self.sized(module, m, d, "--out", out, "--apply")
+            self.assertEqual((code, r["status"]), (0, "prepared"), r)
+            vcode, text = run("validate_pbs_config.py", out, "--module", module)
+            self.assertEqual(vcode, 0, text)
 
     def test_samples_counted_from_a_crlf_manifest(self):
         m = self.tmp / "manifest.csv"
