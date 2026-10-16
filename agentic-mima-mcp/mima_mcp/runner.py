@@ -30,7 +30,10 @@ STATUS = {
     "scan_logs": {0: "no_known_errors", 1: "errors_found", 2: "no_logs"},
     "check_report": {0: "ok", 1: "errors", 2: "unreadable"},
     "submit_jobs": {0: "dry_run_ok", 1: "invalid", 2: "bad_plan"},
+    "prepare_inputs": {0: "prepared", 1: "needs_input", 2: "unreadable"},
 }
+# Scripts whose JSON says more than their exit code can: the script's own status word is used (prepared or unchanged).
+STATUS_FROM_DATA = {"prepare_inputs"}
 REFUSED_FLAGS = {"submit_jobs": {"--execute", "--confirm", "--approval", "--allow-resubmit", "--qsub"}}
 MAX_OUTPUT = 60_000  # characters; keeps one tool result from flooding the model's context
 log = logging.getLogger("mima_mcp")  # stderr only: stdout belongs to the MCP protocol
@@ -110,6 +113,8 @@ async def run_json_script(script, args, timeout=120):
         try:
             r["data"] = json.loads(r["output"])
             r["output"] = ""
+            if script in STATUS_FROM_DATA and isinstance(r["data"], dict) and r["data"].get("status") and r["exit_code"] in (0, 1):
+                r["status"] = r["data"]["status"]
         except ValueError:
             pass
     return r

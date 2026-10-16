@@ -7,6 +7,7 @@ Read this when a validator reports an error you need to explain, or when checkin
 | Rule | Why it matters | Enforced by |
 |---|---|---|
 | Manifest header is exactly `Sample_ID,FileID_R1,FileID_R2` (case-sensitive) | The QC step reads these column names | `validate_manifest.py` |
+| Sample IDs use letters, digits and underscores only | Sample_ID names every downstream file and must match the metadata and feature tables. This is general good practice and a project convention; it has not been shown to be required by the container | `validate_manifest.py`, `validate_metadata.py` (warnings), fixed by `prepare_inputs.py` |
 | Manifest has Unix line endings, no BOM | CRLF corrupts the last column value and silently breaks file lookup | `validate_manifest.py` |
 | Manifest file names are relative to the QC `-i` directory, not absolute | The pipeline joins `-i` and the file name | `validate_manifest.py` (warning) |
 | Sample IDs and FASTQ names are unique; R1 differs from R2 | Duplicates overwrite outputs or misalign pairs | `validate_manifest.py` |
@@ -58,3 +59,7 @@ Read this when a validator reports an error you need to explain, or when checkin
 - Quote each error with its fix. Do not paraphrase away the file name or line number.
 - Treat warnings as decisions to surface, not noise: unset defaults, skipped filesystem checks and small group sizes all belong in the summary to the user.
 - When `--check-fs` was skipped, say so and give the exact command to re-run on the cluster.
+
+## Preparing user files
+
+`scripts/prepare_inputs.py` makes corrected copies that follow the rules above. It changes only what has one right answer (line endings, byte-order mark, delimiter, header names, spaces, absolute paths, sample ID characters). It stops and asks when the meaning could change: R1 and R2 that look swapped, duplicate or colliding IDs, several lanes per sample, unpaired files, files in several folders, ambiguous columns. It writes `id_map.tsv` (original ID, pipeline ID) so reports can use the user's own names. The user's originals are never modified.

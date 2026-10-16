@@ -854,6 +854,168 @@ class TestContainerFindings(unittest.TestCase):
         self.assertIn("reads_unclassified", notes["mima-bracken-report"]); self.assertIn("mpa3", notes["mima-function-profiling"].lower())
 
 
+class TestPrepareInputs(unittest.TestCase):
+    """prepare_inputs.py: corrected copies only, nothing guessed, originals untouched."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.out = self.tmp / "prepared"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def sheet(self, body, name="sheet.csv", raw=None):
+        p = self.tmp / name
+        p.write_bytes(raw if raw is not None else body.encode())
+        return p
+
+    def prep(self, *args, apply=False):
+        a = list(args) + ["--out-dir", self.out, "--format", "json"] + (["--apply"] if apply else [])
+        code, text = run("prepare_inputs.py", *a)
+        try:
+            return code, json.loads(text)
+        except ValueError:
+            return code, text
+
+    MESSY = b"\xef\xbb\xbfsample;r1;r2\r\nA-1;a1_R1.fq.gz;a1_R2.fq.gz\r\nB 2;b2_R1.fq.gz;b2_R2.fq.gz\r\n"
+
+    def test_dry_run_writes_nothing(self):
+        m = self.sheet("", raw=self.MESSY)
+        code, d = self.prep("--manifest", m)
+        self.assertEqual((code, d["status"], d["applied"]), (0, "prepared", False))
+        self.assertFalse(self.out.exists())
+
+    def test_apply_writes_valid_copies_and_leaves_originals_alone(self):
+        m = self.sheet("", raw=self.MESSY)
+        md = self.sheet("sample;group\nA-1;x\nB 2;y\n", name="meta.csv")
+        before = (m.read_bytes(), md.read_bytes())
+        code, d = self.prep("--manifest", m, "--metadata", md, apply=True)
+        self.assertEqual((code, d["status"]), (0, "prepared"), d)
+        self.assertEqual((m.read_bytes(), md.read_bytes()), before)
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), ["id_map.tsv", "manifest.csv", "metadata.tsv"])
+        raw = (self.out / "manifest.csv").read_bytes()
+        self.assertNotIn(b"\r", raw)
+        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+        self.assertTrue(raw.startswith(b"Sample_ID,FileID_R1,FileID_R2\n"))
+        rows = [r.split("\t") for r in (self.out / "id_map.tsv").read_text().splitlines()]
+        self.assertEqual(rows[0], ["original_id", "pipeline_id", "changed"])
+        self.assertEqual({r[0]: r[1] for r in rows[1:]}, {"A-1": "A_1", "B 2": "B_2"})
+        code, text = run("validate_manifest.py", self.out / "manifest.csv")
+        self.assertEqual(code, 0, text)
+        code, text = run("validate_metadata.py", self.out / "metadata.tsv", "--group-column", "group")
+        self.assertEqual(code, 0, text)
+        self.assertEqual([l.split("\t")[0] for l in (self.out / "metadata.tsv").read_text().splitlines()[1:]], ["A_1", "B_2"])
+
+    def test_clean_manifest_is_unchanged_and_text_ends_with_result_line(self):
+        m = self.sheet("Sample_ID,FileID_R1,FileID_R2\nS1,a_1.fq.gz,a_2.fq.gz\n")
+        code, d = self.prep("--manifest", m, apply=True)
+        self.assertEqual((code, d["status"]), (0, "unchanged"))
+        code, text = run("prepare_inputs.py", "--manifest", m, "--out-dir", self.tmp / "o2")
+        self.assertEqual(text.strip().splitlines()[-1], "RESULT: UNCHANGED")
+
+    def test_headerless_and_absolute_paths(self):
+        reads = self.tmp / "reads"
+        reads.mkdir()
+        (reads / "a_1.fq.gz").write_text("x")
+        (reads / "a_2.fq.gz").write_text("x")
+        m = self.sheet("S1,%s/a_1.fq.gz,%s/a_2.fq.gz\n" % (reads, reads))
+        code, d = self.prep("--manifest", m, apply=True)
+        self.assertEqual((code, d["status"]), (0, "prepared"), d)
+        self.assertEqual((self.out / "manifest.csv").read_text(), "Sample_ID,FileID_R1,FileID_R2\nS1,a_1.fq.gz,a_2.fq.gz\n")
+
+    def test_questions_are_asked_and_nothing_is_written(self):
+        cases = {
+            "swapped R1 R2": "Sample_ID,FileID_R1,FileID_R2\nS1,a_R2.fq.gz,a_R1.fq.gz\n",
+            "duplicate id": "Sample_ID,FileID_R1,FileID_R2\nS1,a_1.fq.gz,a_2.fq.gz\nS1,b_1.fq.gz,b_2.fq.gz\n",
+            "colliding ids": "Sample_ID,FileID_R1,FileID_R2\nA-1,a_1.fq.gz,a_2.fq.gz\nA_1,b_1.fq.gz,b_2.fq.gz\n",
+            "same file both reads": "Sample_ID,FileID_R1,FileID_R2\nS1,a_1.fq.gz,a_1.fq.gz\n",
+            "space in file name": "Sample_ID,FileID_R1,FileID_R2\nS1,a 1.fq.gz,a 2.fq.gz\n",
+            "file used twice": "Sample_ID,FileID_R1,FileID_R2\nS1,a_1.fq.gz,a_2.fq.gz\nS2,a_1.fq.gz,b_2.fq.gz\n",
+            "files in two folders": "Sample_ID,FileID_R1,FileID_R2\nS1,/d1/a_1.fq.gz,/d1/a_2.fq.gz\nS2,/d2/b_1.fq.gz,/d2/b_2.fq.gz\n",
+        }
+        for label, body in cases.items():
+            if self.out.exists():
+                shutil.rmtree(self.out)
+            m = self.sheet(body)
+            code, d = self.prep("--manifest", m, apply=True)
+            self.assertEqual((code, d["status"]), (1, "needs_input"), label)
+            self.assertTrue(d["needs_input"], label)
+            self.assertFalse(self.out.exists(), label)
+
+    def test_ambiguous_columns_are_not_guessed(self):
+        m = self.sheet("id,reads,reads\nS1,a_1.fq.gz,a_2.fq.gz\n")
+        code, d = self.prep("--manifest", m, apply=True)
+        self.assertEqual((code, d["status"]), (1, "needs_input"), d)
+        self.assertFalse(self.out.exists())
+
+    def test_missing_files_are_reported_when_reads_dir_given(self):
+        reads = self.tmp / "reads"
+        reads.mkdir()
+        (reads / "a_1.fq.gz").write_text("x")
+        m = self.sheet("Sample_ID,FileID_R1,FileID_R2\nS1,a_1.fq.gz,a_2.fq.gz\n")
+        code, d = self.prep("--manifest", m, "--reads-dir", reads)
+        self.assertEqual((code, d["status"]), (1, "needs_input"), d)
+
+    def test_from_reads_pairs_illumina_names_and_flags_unpaired(self):
+        reads = self.tmp / "reads"
+        reads.mkdir()
+        for n in ("S1_R1.fastq.gz", "S1_R2.fastq.gz", "S2_R1.fastq.gz", "S2_R2.fastq.gz"):
+            (reads / n).write_text("x")
+        code, d = self.prep("--from-reads", reads, apply=True)
+        self.assertEqual((code, d["status"]), (0, "prepared"), d)
+        self.assertEqual((self.out / "manifest.csv").read_text().splitlines()[1:],
+                         ["S1,S1_R1.fastq.gz,S1_R2.fastq.gz", "S2,S2_R1.fastq.gz,S2_R2.fastq.gz"])
+        shutil.rmtree(self.out)
+        (reads / "S3_R1.fastq.gz").write_text("x")
+        code, d = self.prep("--from-reads", reads, apply=True)
+        self.assertEqual((code, d["status"]), (1, "needs_input"), d)
+        self.assertFalse(self.out.exists())
+
+    def test_from_reads_flags_several_lanes(self):
+        reads = self.tmp / "reads"
+        reads.mkdir()
+        for n in ("S1_L001_R1_001.fastq.gz", "S1_L001_R2_001.fastq.gz", "S1_L002_R1_001.fastq.gz", "S1_L002_R2_001.fastq.gz"):
+            (reads / n).write_text("x")
+        code, d = self.prep("--from-reads", reads)
+        self.assertEqual((code, d["status"]), (1, "needs_input"), d)
+
+    def test_metadata_problems_are_questions_and_one_sided_ids_warn(self):
+        m = self.sheet("Sample_ID,FileID_R1,FileID_R2\nS1,a_1.fq.gz,a_2.fq.gz\nS2,b_1.fq.gz,b_2.fq.gz\n")
+        md = self.sheet("sample\tgroup\nS1\tx\nS1\ty\n", name="dup_meta.tsv")
+        code, d = self.prep("--manifest", m, "--metadata", md)
+        self.assertEqual((code, d["status"]), (1, "needs_input"), d)
+        md2 = self.sheet("sample\tgroup\nS1\tx\nS9\ty\n", name="meta2.tsv")
+        code, d = self.prep("--manifest", m, "--metadata", md2)
+        self.assertEqual(code, 0, d)
+        self.assertTrue(d["warnings"])
+
+    def test_unusable_output_folder_and_missing_input_exit_2(self):
+        m = self.sheet("Sample_ID,FileID_R1,FileID_R2\nS1,a_1.fq.gz,a_2.fq.gz\n")
+        self.out.mkdir()
+        (self.out / "keep.txt").write_text("mine")
+        code, _ = self.prep("--manifest", m)
+        self.assertEqual(code, 2)
+        self.assertEqual((self.out / "keep.txt").read_text(), "mine")
+        shutil.rmtree(self.out)
+        code, _ = self.prep("--manifest", self.tmp / "missing.csv")
+        self.assertEqual(code, 2)
+
+    def test_id_rule_is_in_step_with_the_validator(self):
+        pat = [re.search(r"ID_BAD\s*=\s*re\.compile\((r?[\"'].*?[\"'])\)|ID_BAD\s*=\s*(.+)", (SC / f).read_text()) for f in ("prepare_inputs.py", "validate_manifest.py")]
+        self.assertTrue(all(pat))
+        self.assertEqual([p.group(0).split("=", 1)[1].strip() for p in pat][0], [p.group(0).split("=", 1)[1].strip() for p in pat][1])
+
+    def test_validators_warn_about_unusual_id_characters(self):
+        m = self.sheet("Sample_ID,FileID_R1,FileID_R2\nA-1,a_1.fq.gz,a_2.fq.gz\n")
+        code, text = run("validate_manifest.py", m)
+        self.assertEqual(code, 0, text)
+        self.assertIn("letters, digits and underscores", text)
+        md = self.sheet("sample\tgroup\nA-1\tx\nB-2\ty\n", name="m.tsv")
+        code, text = run("validate_metadata.py", md, "--group-column", "group")
+        self.assertEqual(code, 0, text)
+        self.assertIn("underscores", text)
+
+
 class TestSkillConsistency(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -935,10 +1097,11 @@ class TestSkillConsistency(unittest.TestCase):
                 if api in src: self.fail(f"{f.name} uses {api}, newer than Python 3.6")
 
     @unittest.skipUnless(shutil.which("vermin"), "vermin is not installed (pip install vermin)")
-    def test_vermin_reports_python36_for_every_script(self):
+    def test_vermin_reports_no_newer_than_python36_for_every_script(self):
         for f in sorted(SC.glob("*.py")):
             out = subprocess.run(["vermin", "--no-tips", "--eval-annotations", str(f)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True).stdout
-            self.assertIn("Minimum required versions: 3.6", out, f"{f.name}: {out[-300:]}")
+            m = re.search(r"Minimum required versions: (\d+)\.(\d+)", out)
+            self.assertTrue(m and (int(m.group(1)), int(m.group(2))) <= (3, 6), f"{f.name} needs newer than Python 3.6: {out[-300:]}")
 
     def test_specs_and_patterns_are_valid_json_and_modules_documented(self):
         spec = json.loads((SC / "command_specs.json").read_text())["modules"]

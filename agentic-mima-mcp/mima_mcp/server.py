@@ -30,13 +30,17 @@ from .runner import STATUS, check_path, check_token, run_json_script, run_script
 READ_ONLY = dict(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 # mima_prepare_submission writes only its own plan file in run_dir and never submits.
 WRITES_PLAN = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+# mima_write_prepared_inputs creates a NEW folder of corrected copies; it never changes or deletes the user's files.
+WRITES_COPIES = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 
 mcp = FastMCP(
     "mima_mcp",
     mask_error_details=True,
     instructions=(
         "Tools for planning, validating and checking MIMA shotgun-metagenomics runs on a PBS cluster. "
-        "All tools are read-only except mima_prepare_submission, which writes a plan file and does a dry run. "
+        "All tools are read-only except mima_prepare_submission (writes a plan file and does a dry run) and "
+        "mima_write_prepared_inputs (writes corrected COPIES of the user's manifest and metadata into a new folder; "
+        "the originals are never changed). "
         "Nothing here submits a job: a person runs the command that mima_prepare_submission returns. "
         "Every result has a 'status'; report it as returned and do not guess when it is not ok/valid/complete."
     ),
@@ -239,6 +243,67 @@ async def mima_check_report(
     if run_dir:
         args += ["--run-dir", check_path(run_dir, "run_dir")]
     return await run_json_script("check_report", args)
+
+
+def _prepare_args(manifest_path, from_reads_dir, reads_dir, metadata_path, out_dir, apply):
+    if bool(manifest_path) == bool(from_reads_dir):
+        raise ToolError("give exactly one of manifest_path (the user's manifest or sample sheet) or from_reads_dir (a folder of FASTQ files)")
+    args = []
+    if manifest_path:
+        args += ["--manifest", check_path(manifest_path, "manifest_path")]
+    if from_reads_dir:
+        args += ["--from-reads", check_path(from_reads_dir, "from_reads_dir")]
+    if reads_dir:
+        args += ["--reads-dir", check_path(reads_dir, "reads_dir")]
+    if metadata_path:
+        args += ["--metadata", check_path(metadata_path, "metadata_path")]
+    args += ["--out-dir", check_path(out_dir, "out_dir")]
+    return args + (["--apply"] if apply else [])
+
+
+_MANIFEST = Annotated[Optional[str], Field(description="The user's manifest or sample sheet, in any common layout (CSV, TSV, semicolons; any column names). Give this OR from_reads_dir.", max_length=1024)]
+_FROM_READS = Annotated[Optional[str], Field(description="A folder of FASTQ files to build the manifest from when the user has no sample sheet. Give this OR manifest_path.", max_length=1024)]
+_READS_DIR = Annotated[Optional[str], Field(description="Folder holding the FASTQ files (the QC -i folder). File existence is checked when given.", max_length=1024)]
+_METADATA = Annotated[Optional[str], Field(description="The user's study metadata (any common layout)", max_length=1024)]
+_OUT_DIR = Annotated[str, Field(description="A NEW folder for the corrected copies (it must not exist or must be empty), e.g. inside the run folder", min_length=2, max_length=1024)]
+
+
+@_tool("mima_prepare_inputs", "Plan the clean-up of the user's manifest and metadata (writes nothing)")
+async def mima_prepare_inputs(
+    out_dir: _OUT_DIR,
+    manifest_path: _MANIFEST = None,
+    from_reads_dir: _FROM_READS = None,
+    reads_dir: _READS_DIR = None,
+    metadata_path: _METADATA = None,
+) -> dict:
+    """Work out what must change so the user's manifest and metadata follow the MIMA conventions. WRITES NOTHING.
+
+    Call this first with the files as the user gave them (users are not expected to know the conventions). It fixes only mechanical
+    problems: line endings, byte-order marks, delimiters, header names, spaces, full paths, and sample IDs that use characters other
+    than letters, digits and underscores (an original-to-pipeline ID map is kept). It never swaps R1 and R2, never joins lanes, never
+    renames the user's FASTQ files.
+    Returns status: prepared (data.changes lists each change; show them to the user in plain words and ask before writing),
+    unchanged (the files already follow the conventions: use them as they are), needs_input (data.needs_input lists questions to put
+    to the user; nothing can be written until they are answered; do not guess) or unreadable. data.use names the files to use afterwards."""
+    return await run_json_script("prepare_inputs", _prepare_args(manifest_path, from_reads_dir, reads_dir, metadata_path, out_dir, False))
+
+
+@_tool("mima_write_prepared_inputs", "Write corrected copies of the user's manifest and metadata", WRITES_COPIES)
+async def mima_write_prepared_inputs(
+    out_dir: _OUT_DIR,
+    manifest_path: _MANIFEST = None,
+    from_reads_dir: _FROM_READS = None,
+    reads_dir: _READS_DIR = None,
+    metadata_path: _METADATA = None,
+) -> dict:
+    """Write the corrected COPIES that mima_prepare_inputs planned. Call only after the user has seen the changes and said yes,
+    with exactly the same arguments as the preview.
+
+    Creates out_dir (which must not exist or must be empty) holding manifest.csv, metadata.tsv (when metadata was given) and
+    id_map.tsv. The user's original files are never changed or deleted and nothing is overwritten. Writes nothing and returns
+    needs_input when any question is open. Returns status prepared (data.written lists the files; use data.use afterwards),
+    unchanged, needs_input or unreadable. Then run the validators on the files you will use."""
+    return await run_json_script("prepare_inputs", _prepare_args(manifest_path, from_reads_dir, reads_dir, metadata_path, out_dir, True))
 
 
 @_tool("mima_prepare_submission", "Prepare a job submission (does not submit)", WRITES_PLAN)

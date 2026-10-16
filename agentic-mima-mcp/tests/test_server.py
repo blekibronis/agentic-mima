@@ -25,7 +25,7 @@ from mima_mcp.server import mcp  # noqa: E402
 
 EXPECTED_TOOLS = {"mima_list_modules", "mima_build_commands", "mima_validate_manifest", "mima_validate_metadata", "mima_validate_pbs_config",
                   "mima_validate_pbs_scripts", "mima_estimate_read_length", "mima_check_outputs", "mima_check_job_status", "mima_scan_logs",
-                  "mima_check_report", "mima_prepare_submission"}
+                  "mima_check_report", "mima_prepare_submission", "mima_prepare_inputs", "mima_write_prepared_inputs"}
 BRACKEN = ">> ERROR: Input file /scratch/x/kraken2/S1.kraken2.report does not exist"
 
 
@@ -113,7 +113,7 @@ class TestToolSurface(Base):
             self.assertTrue(name.startswith("mima_"), name)
             self.assertIs(d["destructiveHint"], False, name)
             self.assertIs(d["openWorldHint"], False, name)
-            self.assertIs(d["readOnlyHint"], name != "mima_prepare_submission", name)
+            self.assertIs(d["readOnlyHint"], name not in ("mima_prepare_submission", "mima_write_prepared_inputs"), name)
 
     def test_runner_refuses_execution_flags(self):
         for flag in ("--execute", "--confirm", "--approval", "--allow-resubmit", "--qsub"):
@@ -170,6 +170,46 @@ class TestArguments(Base):
         self.assertIn("not a PBS job id", call_error("mima_check_job_status", {"job_ids": ["1; rm -rf /"]}))
         self.assertIn("exactly one", call_error("mima_check_job_status", {}))
         self.assertIn("exactly one", call_error("mima_check_job_status", {"job_ids": ["1.s"], "record_path": "/x.json"}))
+
+
+class TestPrepareInputsTools(Base):
+    def _messy(self):
+        m = self.tmp / "sheet.csv"
+        m.write_bytes(b"\xef\xbb\xbfsample;r1;r2\r\nA-1;a1_R1.fq.gz;a1_R2.fq.gz\r\nB-2;b2_R1.fq.gz;b2_R2.fq.gz\r\n")
+        return m
+
+    def test_preview_writes_nothing_and_apply_writes_copies_only(self):
+        m = self._messy()
+        before = m.read_bytes()
+        out = self.tmp / "prepared"
+        r = call("mima_prepare_inputs", {"manifest_path": str(m), "out_dir": str(out)})
+        self.assertEqual(r["status"], "prepared", r)
+        self.assertFalse(out.exists())
+        w = call("mima_write_prepared_inputs", {"manifest_path": str(m), "out_dir": str(out)})
+        self.assertEqual(w["status"], "prepared", w)
+        self.assertEqual(sorted(p.name for p in out.iterdir()), ["id_map.tsv", "manifest.csv"])
+        self.assertEqual(m.read_bytes(), before)
+        self.assertEqual(call("mima_validate_manifest", {"manifest_path": str(out / "manifest.csv")})["status"], "valid")
+
+    def test_clean_manifest_is_unchanged_and_open_questions_write_nothing(self):
+        ok = self.tmp / "ok.csv"
+        ok.write_text("Sample_ID,FileID_R1,FileID_R2\nS1,a_1.fq.gz,a_2.fq.gz\n")
+        self.assertEqual(call("mima_prepare_inputs", {"manifest_path": str(ok), "out_dir": str(self.tmp / "o1")})["status"], "unchanged")
+        dup = self.tmp / "dup.csv"
+        dup.write_text("Sample_ID,FileID_R1,FileID_R2\nS1,a_1.fq.gz,a_2.fq.gz\nS1,b_1.fq.gz,b_2.fq.gz\n")
+        out = self.tmp / "o2"
+        r = call("mima_write_prepared_inputs", {"manifest_path": str(dup), "out_dir": str(out)})
+        self.assertEqual(r["status"], "needs_input")
+        self.assertTrue(r["data"]["needs_input"])
+        self.assertFalse(out.exists())
+
+    def test_argument_checks(self):
+        m = self._messy()
+        self.assertIn("exactly one", call_error("mima_prepare_inputs", {"out_dir": str(self.tmp / "o")}))
+        self.assertIn("exactly one", call_error("mima_prepare_inputs", {"manifest_path": str(m), "from_reads_dir": str(self.tmp), "out_dir": str(self.tmp / "o")}))
+        os.environ["MIMA_ALLOWED_ROOTS"] = str(self.tmp)
+        self.assertIn("outside the allowed folders", call_error("mima_write_prepared_inputs", {"manifest_path": str(m), "out_dir": "/etc/prepared"}))
+        self.assertEqual(call("mima_prepare_inputs", {"manifest_path": str(self.tmp / "missing.csv"), "out_dir": str(self.tmp / "o")})["status"], "unreadable")
 
 
 class TestWrappedScripts(Base):

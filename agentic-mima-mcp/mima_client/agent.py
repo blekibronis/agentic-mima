@@ -9,6 +9,8 @@ from pathlib import Path
 from .llm import post, result_text, tool_specs
 
 SUBMISSION_TOOL = "mima_prepare_submission"
+WRITE_TOOL = "mima_write_prepared_inputs"
+GATED = (SUBMISSION_TOOL, WRITE_TOOL)  # each call needs a person's yes
 READ_TOOL = "skill_read_file"
 READABLE_DIRS = ("references", "assets")
 READ_LIMIT = 40000
@@ -90,7 +92,7 @@ class Agent:
             return read_skill_file(self.skill_dir, args.get("path", ""))[1]
         if name not in self.names:
             return "No such tool: %s" % name
-        if name == SUBMISSION_TOOL and not self.approve(name, args):
+        if name in GATED and not self.approve(name, args):
             return "Not approved by the person. Do not retry; tell them what you wanted to check and why."
         try:
             return result_text(await self.client.call_tool(name, args, raise_on_error=False), self.result_limit)
