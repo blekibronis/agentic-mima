@@ -133,8 +133,8 @@ A pass shows that the scripts behave as designed on mock inputs and that the ski
 
 - The scripts run on Gadi's Python 3.6.8 with the current files: manifest, metadata, PBS config and PBS script validation, command building (good plans accepted, bad plans refused), read-length estimation, QC output checks, log scanning and job-status reading.
 - 110 automated tests pass. A static check confirms the scripts use only Python 3.6 features.
-- The MCP server's 24 tests (v0.3.0) pass on Gadi (Python 3.12.1, fastmcp 4.1.0), and the 10 evaluation questions recompute correctly by direct tool calls.
-- An MCP client (Antigravity 2.0) connected to the server on Gadi over SSH, listed 11 tools, called `mima_list_modules`, and had a path outside the allowed folders refused.
+- The MCP server's 25 tests (v0.3.1) pass on Gadi (Python 3.12.1, fastmcp 4.1.0), and the 10 evaluation questions recompute correctly by direct tool calls.
+- An MCP client (Antigravity 2.0) connected to the server on Gadi over SSH and listed 11 tools. Through it, six read-only tools returned the same results as the command-line scripts on real Gadi data: `mima_list_modules`, `mima_validate_manifest`, `mima_scan_logs`, `mima_check_outputs` (including its short summary), `mima_check_job_status` (a finished job aged out of history is reported as unresolved), and a path outside the allowed folders was refused.
 
 **Not yet verified**
 
