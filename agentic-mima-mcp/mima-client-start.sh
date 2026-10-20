@@ -10,4 +10,6 @@ export MIMA_SKILL_DIR="${MIMA_SKILL_DIR:-$here/../agentic-mima}"
 export MIMA_ALLOWED_ROOTS="${MIMA_ALLOWED_ROOTS:-$HOME:/scratch/mp96:/g/data/mp96}"
 cd "$here"
 if [ "$1" = "preflight" ]; then shift; exec python3 -m mima_client.preflight "$@"; fi
+# Submission is switched on only for the chat client: the server then asks YOU to type SUBMIT before anything is queued.
+export MIMA_ALLOW_SUBMIT="${MIMA_ALLOW_SUBMIT:-1}"
 exec python3 -m mima_client "$@"

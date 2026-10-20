@@ -7,12 +7,14 @@ call which tool; the scripts decide what is valid.
 Every result is a dict: script, command, exit_code, status (a word from the script's own exit
 codes), output (the script's text), data (parsed JSON, when the script offers it), stderr, truncated.
 
-No tool submits a job. mima_prepare_submission runs submit_jobs.py as a dry run and returns the
-command a person must run themselves in a terminal.
+mima_prepare_submission runs submit_jobs.py as a dry run. mima_submit_jobs can then submit that plan, but only when the
+server was started with MIMA_ALLOW_SUBMIT=1 and the person picks "submit" in the client's own approval prompt (MCP
+elicitation). A client that cannot ask, a decline or a dismissed prompt all mean nothing is submitted.
 """
 import argparse
 import json
 import logging
+import os
 import re
 import shlex
 import sys
@@ -20,18 +22,22 @@ import tempfile
 from pathlib import Path
 from typing import Annotated, List, Literal, Optional
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from .runner import STATUS, check_path, check_token, run_json_script, run_script, scripts_dir
+from .runner import STATUS, check_path, check_token, run_approved_submission, run_json_script, run_script, scripts_dir
+
+log = logging.getLogger("mima_mcp")  # stderr only: stdout belongs to the MCP protocol
 
 READ_ONLY = dict(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 # mima_prepare_submission writes only its own plan file in run_dir and never submits.
 WRITES_PLAN = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 # mima_write_prepared_inputs creates a NEW folder of corrected copies; it never changes or deletes the user's files.
 WRITES_COPIES = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
+# mima_submit_jobs queues jobs, but only after the person approves through the client's prompt; it deletes nothing.
+SUBMITS = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 
 mcp = FastMCP(
     "mima_mcp",
@@ -41,7 +47,8 @@ mcp = FastMCP(
         "All tools are read-only except mima_prepare_submission (writes a plan file and does a dry run) and "
         "mima_write_prepared_inputs (writes corrected COPIES of the user's manifest and metadata into a new folder; "
         "the originals are never changed) and mima_write_pbs_header (writes a NEW PBS header file; never overwrites). "
-        "Nothing here submits a job: a person runs the command that mima_prepare_submission returns. "
+        "mima_submit_jobs submits a prepared plan only when the person picks 'submit' in an approval prompt that the client shows them; "
+        "call it only after they have reviewed the plan and asked you to submit. Never assume or infer approval. "
         "Every result has a 'status'; report it as returned and do not guess when it is not ok/valid/complete."
     ),
 )
@@ -449,6 +456,96 @@ async def mima_prepare_submission(
         dry["note"] = ("Nothing was submitted. Review the qsub commands above, then run `run_yourself` in your own terminal "
                        "and type the confirmation when asked. It refuses to run without an interactive terminal.")
     return dry
+
+
+def _submit_enabled():
+    return os.environ.get("MIMA_ALLOW_SUBMIT") == "1"
+
+
+def _max_jobs():
+    try:
+        return max(1, int(os.environ.get("MIMA_MAX_SUBMIT_JOBS", "50")))
+    except ValueError:
+        return 50
+
+
+def _pbs_summary(script):
+    """The #PBS resource lines of one script, for the approval prompt."""
+    try:
+        lines = Path(script).read_text(errors="replace").splitlines()[:80]
+    except OSError:
+        return "(script unreadable)"
+    keep = [l.strip()[5:].strip() for l in lines if re.match(r"#PBS\s+-(N|l|P|q)\b", l.strip())]
+    return "; ".join(keep) or "(no #PBS resource lines)"
+
+
+@_tool("mima_submit_jobs", "Submit prepared jobs after the person approves", SUBMITS)
+async def mima_submit_jobs(
+    run_dir: Annotated[str, Field(description="The same run_dir given to mima_prepare_submission", min_length=2, max_length=1024)],
+    token: Annotated[str, Field(description="The confirmation token returned by mima_prepare_submission for this exact plan", min_length=4, max_length=200)],
+    ctx: Context,
+    check_fs: Annotated[bool, Field(description="Same value as given to mima_prepare_submission")] = True,
+    project: Annotated[Optional[str], Field(description="Same value as given to mima_prepare_submission, if any")] = None,
+    queue: Annotated[Optional[str], Field(description="Same value as given to mima_prepare_submission, if any")] = None,
+) -> dict:
+    """Ask the person to approve, then submit the plan prepared by mima_prepare_submission.
+
+    Call this ONLY when the person has reviewed the prepared plan and has asked you to submit it. Calling it does not submit:
+    the client shows the person the jobs and a clear submit / do-not-submit choice, and nothing is submitted unless they
+    pick submit. Never describe a job as submitted unless status is submitted. Statuses: submitted, partly_submitted,
+    not_submitted, declined, cancelled, stale (the plan or scripts changed since the token was issued: prepare again),
+    invalid, disabled (this server was not started with submission enabled), approval_unavailable (this client cannot ask
+    the person; they must use run_yourself from mima_prepare_submission) or too_many_jobs."""
+    out = {"script": "submit_jobs", "submitted": False}
+    if not _submit_enabled():
+        out.update(status="disabled", note="Submission is not enabled on this server (MIMA_ALLOW_SUBMIT=1 is not set). "
+                   "Give the person the run_yourself command from mima_prepare_submission instead.")
+        return out
+    run = Path(check_path(run_dir, "run_dir"))
+    token = check_token(token, "token")
+    plan, record = run / "submission_plan.json", run / "submission_record.json"
+    if not plan.is_file():
+        raise ToolError(f"No submission_plan.json in {run_dir}. Run mima_prepare_submission first.")
+    extra_args = []
+    for flag, val in (("--project", project), ("--queue", queue)):
+        if val:
+            extra_args += [flag, check_token(val, flag)]
+    dry = await run_script("submit_jobs", [str(plan), "--record", str(record)] + extra_args + ([] if check_fs else ["--no-fs-check"]))
+    m = re.search(r"Confirmation token: ([0-9a-f]+)", dry["output"])
+    if dry["status"] != "dry_run_ok" or not m:
+        out.update(status="invalid", note="The plan no longer passes the dry run. Nothing was submitted.", output=dry["output"])
+        return out
+    if m.group(1) != token:
+        out.update(status="stale", note="The plan or the scripts changed since the token was issued. Nothing was submitted. "
+                   "Run mima_prepare_submission again and have the person review it.")
+        return out
+    jobs = json.loads(plan.read_text()).get("jobs", [])
+    if len(jobs) > _max_jobs():
+        out.update(status="too_many_jobs", note=f"{len(jobs)} jobs is above this server's limit of {_max_jobs()}. Nothing was submitted.")
+        return out
+    submit_choice = f"Submit {len(jobs)} job(s) now"
+    cancel_choice = "Do NOT submit"
+    where = " ".join(a for a in (f"project {project}" if project else "", f"queue {queue}" if queue else "") if a)
+    message = (f"APPROVAL NEEDED. Submit {len(jobs)} job(s) to the cluster queue? {where}".rstrip() + "\n"
+               + "\n".join(f"  {j['id']}: {j['script']}\n      {_pbs_summary(j['script'])}" for j in jobs)
+               + "\nChoose '" + submit_choice + "' only if you have reviewed these jobs.")
+    try:
+        answer = await ctx.elicit(message, response_type=[submit_choice, cancel_choice])
+    except Exception as exc:  # the client cannot ask: fail closed
+        log.warning("approval prompt failed: %s", type(exc).__name__)
+        out.update(status="approval_unavailable", note="This client cannot ask the person for approval, so nothing was submitted. "
+                   "Give the person the run_yourself command from mima_prepare_submission.")
+        return out
+    if answer.action == "cancel":
+        out.update(status="cancelled", note="The approval prompt was dismissed. Nothing was submitted.")
+        return out
+    if answer.action != "accept" or getattr(answer, "data", None) != submit_choice:
+        out.update(status="declined", note="The person did not approve. Nothing was submitted.")
+        return out
+    res = await run_approved_submission(plan, record, token, project, queue, check_fs)
+    res["submitted"] = res["status"] in ("submitted", "partly_submitted")
+    res["approved_by"] = "person, through the client approval prompt"
+    return res
 
 
 def main(argv=None):

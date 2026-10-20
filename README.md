@@ -100,9 +100,9 @@ The skill folder deliberately contains only `SKILL.md`, `scripts/`, `references/
 
 [`agentic-mima-mcp/`](agentic-mima-mcp/) wraps the skill's scripts as 12 MCP tools (all prefixed `mima_`) using [FastMCP](https://gofastmcp.com). It needs Python 3.10 or later.
 
-- **No tool submits a job.** `mima_prepare_submission` does a dry run and returns the command and confirmation token for *you* to run in a terminal. The server refuses the flags that would execute a submission.
+- **Submission needs your approval and is off by default.** `mima_prepare_submission` does a dry run. `mima_submit_jobs` can then submit that plan only if the server was started with `MIMA_ALLOW_SUBMIT=1` and you answer the client's approval prompt (in `mima_client`, by typing `SUBMIT`); the model cannot answer it. If the client cannot ask, nothing is submitted.
 - **Paths can be confined.** Set `MIMA_ALLOWED_ROOTS` to a colon-separated list of folders; any path outside them is refused.
-- **Read-only by default.** All tools except `mima_prepare_submission` (writes a plan file) and `mima_write_prepared_inputs` (writes corrected copies of the user's manifest and metadata into a new folder; originals are never changed) are annotated read-only.
+- **Read-only by default.** All tools except `mima_prepare_submission` (writes a plan file), `mima_submit_jobs` (after your approval) and `mima_write_prepared_inputs` (writes corrected copies of the user's manifest and metadata into a new folder; originals are never changed) are annotated read-only.
 
 Start-up check (after installing `fastmcp` in a Python 3.10+ environment):
 

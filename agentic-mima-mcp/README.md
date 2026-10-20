@@ -24,13 +24,19 @@ checks arguments, runs one script, and returns its exit code, a status word and 
 | `mima_plan_pbs_header` | make_pbs_header (preview) | nothing | prepared, needs_input, invalid |
 | `mima_write_pbs_header` | make_pbs_header `--apply` | a NEW PBS header file (`out_file`); never overwrites | prepared, needs_input, invalid |
 | `mima_prepare_submission` | submit_jobs **dry run** | writes `submission_plan.json` in `run_dir` | dry_run_ok, invalid, bad_plan |
+| `mima_submit_jobs` | submit_jobs `--execute` | queues the prepared jobs **only after the person approves in the client's prompt**; off unless `MIMA_ALLOW_SUBMIT=1` | submitted, partly_submitted, not_submitted, declined, cancelled, stale, invalid, too_many_jobs, disabled, approval_unavailable |
 
 ## Safety design
 
-* **No tool submits a job.** `mima_prepare_submission` returns `run_yourself`: the exact `submit_jobs.py ... --execute --confirm TOKEN`
-  command for a person to run in their own terminal. `submit_jobs.py` then asks for a typed confirmation and refuses without
-  an interactive terminal. The runner refuses `--execute`, `--confirm`, `--approval`, `--allow-resubmit` and `--qsub`, so
-  the server cannot be used to bypass this.
+* **Submission needs the person's own approval, and fails closed.** `mima_prepare_submission` is a dry run. `mima_submit_jobs`
+  can then queue that plan, but only when (1) the server was started with `MIMA_ALLOW_SUBMIT=1` (default: off), (2) the token still
+  matches the reviewed plan and scripts, (3) the plan is within `MIMA_MAX_SUBMIT_JOBS` (default 50) and (4) the person answers an
+  approval prompt (MCP elicitation) that the client shows them, listing every job and its `#PBS` resources. The model never sees or
+  gives that answer. A decline, a dismissed prompt, a client that cannot show prompts (or speaks only the newest protocol era,
+  which has no such prompt in FastMCP 4.1) all end with nothing submitted; the person then gets `run_yourself` to type in a terminal.
+  `mima_client` shows the prompt and accepts only `SUBMIT` typed in capitals. The runner still refuses `--execute`, `--confirm`,
+  `--approval`, `--allow-resubmit` and `--qsub` in every ordinary call; the one approved path fixes its own arguments and can never
+  resubmit a recorded script. Third-party clients (Kimi Code, Claude) must support elicitation for this to work; test that before enabling.
 * Only scripts on an allow-list run, from `$MIMA_SKILL_DIR/scripts`, with a fixed argument list (no shell).
 * Paths must be absolute, may not start with `-`, and (when `MIMA_ALLOWED_ROOTS` is set) must resolve inside those
   folders, symlinks included. Job ids and plan fields are checked against patterns.
@@ -79,8 +85,8 @@ Antigravity and Claude clients load tools and skills themselves. A model served 
 client, so `mima_client` is a small one. It talks to any OpenAI-compatible endpoint that supports tool calling, calls the server's
 tools in-process, and puts the skill's `SKILL.md` in the model's instructions. A tool `skill_read_file` lets the model read the
 skill's `references/` and `assets/` files on demand (nothing else; paths are confined), which replaces the file reading a Claude
-client would do for itself. It cannot submit: `mima_prepare_submission` is a dry run, and it and `mima_write_prepared_inputs` (corrected copies in a new folder) each need your typed yes per call.
-Without a terminal the call is denied. Every message, tool call and result is saved to a JSONL transcript.
+client would do for itself. The model cannot approve a submission: `mima_submit_jobs` asks you, and you must type `SUBMIT` in capitals. The dry run and the writers (`mima_write_prepared_inputs`, `mima_write_pbs_header`) each need your typed yes per call.
+Without a terminal every one of these is denied. Every message, tool call and result is saved to a JSONL transcript.
 
     export MIMA_SKILL_DIR=$HOME/agentic-mima-repo/agentic-mima
     export MIMA_ALLOWED_ROOTS=$HOME:/scratch/mp96

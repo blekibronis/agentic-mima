@@ -41,7 +41,11 @@ class TestSkillAlignment(unittest.TestCase):
 
     def test_skill_links_the_mapping_and_keeps_the_submission_rule(self):
         self.assertIn("references/mcp-tools.md", SKILL_MD)
-        self.assertIn("never ask the server to bypass the typed confirmation", DOC.lower().replace("\n", " "))
+        self.assertIn("never ask the server to skip the user's prompt", DOC.lower().replace("\n", " "))
+        self.assertIn("never answer that prompt", SKILL_MD.lower().replace("\n", " ").replace("you never answer that prompt", "never answer that prompt"))
+        for word in ("submitted", "partly_submitted", "not_submitted", "declined", "cancelled", "stale", "invalid",
+                     "too_many_jobs", "disabled", "approval_unavailable"):
+            self.assertIn(f"`{word}`", DOC, word)
         self.assertNotIn("--approval harness", DOC.replace("never use `--approval harness`", ""))
 
     def test_documented_parameters_exist_in_the_tool_schemas(self):

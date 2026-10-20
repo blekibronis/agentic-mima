@@ -25,9 +25,11 @@ async def main(a):
     from fastmcp import Client
     from mima_mcp.server import mcp
     from .agent import Agent
+    from .approval import make_handler
 
     transcript = a.transcript or "mima_agent_%s.jsonl" % time.strftime("%Y%m%d-%H%M%S")
-    async with Client(mcp) as client:
+    # mode="legacy": the classic handshake, the one that carries the approval prompt (see mima_client/approval.py)
+    async with Client(mcp, mode="legacy", elicitation_handler=make_handler()) as client:
         agent = Agent(client, await client.list_tools(), skill, a.base_url, a.model, ask_yes, api_key=a.api_key,
                       temperature=a.temperature, max_steps=a.max_steps, context_tokens=a.context_tokens,
                       timeout=a.timeout, transcript=transcript, keep_reasoning=a.keep_reasoning,
