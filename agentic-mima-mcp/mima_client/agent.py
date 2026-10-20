@@ -1,6 +1,7 @@
 """Agent loop: the skill's SKILL.md as instructions, the mima_* MCP tools, and a reader for the skill's reference files.
 
-Safety: the model cannot submit jobs. mima_prepare_submission only does a dry run, and each call needs a person's yes.
+Safety: the model cannot approve a submission. mima_submit_jobs asks the person (client prompt, typed SUBMIT) and the server
+submits only if they answer; the dry run and the writers each need a person's yes first.
 """
 import json
 import time
@@ -9,6 +10,7 @@ from pathlib import Path
 from .llm import LLMError, post, result_text, tool_specs
 
 SUBMISSION_TOOL = "mima_prepare_submission"
+SUBMIT_TOOL = "mima_submit_jobs"  # not in GATED: the person is asked by the server through the approval prompt
 WRITE_TOOL = "mima_write_prepared_inputs"
 HEADER_TOOL = "mima_write_pbs_header"
 GATED = (SUBMISSION_TOOL, WRITE_TOOL, HEADER_TOOL)  # each call needs a person's yes
@@ -23,7 +25,8 @@ PREFACE = (
     "skill's own files is the tool skill_read_file (files in references/ and assets/). Where the skill tells you to run a script, "
     "call the matching mima_* tool; where it tells you to read a reference file, call skill_read_file. Always pass absolute paths "
     "to mima_* tools.\n"
-    "You cannot submit jobs. mima_prepare_submission only performs a dry run; the person types the confirmation at a terminal. "
+    "You cannot approve a submission yourself. Call mima_submit_jobs only after the person has reviewed the prepared plan and asked you to submit; "
+    "the program then asks them to approve, and nothing is submitted unless they do. Never say a job was submitted unless the result status is submitted. "
     "If a step needs something you do not have, say so instead of guessing.\n"
     "The skill follows. Follow it exactly.\n\n=== SKILL.md ===\n"
 )
@@ -68,7 +71,7 @@ class Agent:
         self.approve, self.say, self.api_key, self.temperature = approve, say, api_key, temperature
         self.max_steps, self.result_limit, self.timeout = max_steps, result_limit, timeout
         self.context_tokens, self.keep_reasoning = context_tokens, keep_reasoning
-        hide = () if enable_submission_tool else (SUBMISSION_TOOL,)
+        hide = () if enable_submission_tool else (SUBMISSION_TOOL, SUBMIT_TOOL)
         self.specs = tool_specs(tools, hide) + [read_tool_spec(self.skill_dir)]
         self.names = {s["function"]["name"] for s in self.specs}
         skill_md = (self.skill_dir / "SKILL.md").read_text()

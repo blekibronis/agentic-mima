@@ -4,8 +4,9 @@ This module is the only place that starts a process. Rules it enforces:
   * only scripts on the allow-list below are run, from the skill's scripts folder;
   * the command is a fixed argument list, never a shell string;
   * path and token arguments are checked before they reach a script;
-  * submit_jobs.py can only be run as a dry run: --execute, --confirm and --approval
-    are refused here, so no tool in this server can submit a job.
+  * run_script runs submit_jobs.py only as a dry run: --execute, --confirm, --approval, --allow-resubmit and --qsub
+    are refused there. The one way to submit is run_approved_submission, which the server calls only after
+    a person approves through the client's own prompt (see mima_submit_jobs).
 """
 import asyncio
 import json
@@ -104,6 +105,43 @@ async def run_script(script, args, timeout=120):
     result.update(exit_code=proc.returncode, status=STATUS[script].get(proc.returncode, "unexpected_exit"),
                   output=out, stderr=err_b.decode("utf-8", "replace")[-4000:])
     log.info("%s exit=%s status=%s", script, proc.returncode, result["status"])
+    return result
+
+
+async def run_approved_submission(plan, record, token, project=None, queue=None, check_fs=True, timeout=300):
+    """Submit a prepared plan. Call this ONLY after a person has approved it through the client's own prompt.
+
+    The argument list is fixed here: the caller supplies a plan file, record file, the token from the dry run and
+    optionally a project and queue. --allow-resubmit and --qsub can never be passed, so a script already recorded
+    as submitted is refused by submit_jobs.py itself."""
+    path = scripts_dir() / "submit_jobs.py"
+    if not path.is_file():
+        raise ToolError(f"Script not found: {path}")
+    argv = [sys.executable, "-I", str(path), str(plan), "--record", str(record), "--execute",
+            "--confirm", check_token(token, "token"), "--approval", "harness"]
+    for flag, val in (("--project", project), ("--queue", queue)):
+        if val:
+            argv += [flag, check_token(val, flag)]
+    if not check_fs:
+        argv.append("--no-fs-check")
+    result = {"script": "submit_jobs", "command": argv[2:], "truncated": False}
+    try:
+        proc = await asyncio.create_subprocess_exec(*argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout)
+    except OSError as exc:
+        result.update(exit_code=None, status="tool_error", output="", stderr=str(exc))
+        return result
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        result.update(exit_code=None, status="timeout", output="", stderr=f"timed out after {timeout}s; check the record file before retrying")
+        return result
+    out = out_b.decode("utf-8", "replace")[:MAX_OUTPUT]
+    ids = re.findall(r"^\[([A-Za-z0-9_-]+)\] submitted as (\S+)$", out, re.M)
+    status = "submitted" if proc.returncode == 0 else ("partly_submitted" if ids else "not_submitted")
+    result.update(exit_code=proc.returncode, status=status, output=out, stderr=err_b.decode("utf-8", "replace")[-4000:],
+                  pbs_job_ids={i: j for i, j in ids})
+    log.info("submit_jobs (approved) exit=%s status=%s jobs=%s", proc.returncode, status, len(ids))
     return result
 
 

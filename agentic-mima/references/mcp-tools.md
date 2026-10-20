@@ -25,6 +25,7 @@ When your tool list contains tools named `mima_*`, the project's MCP server is c
 | 2 | `estimate_read_length.py` | `mima_estimate_read_length` | `available` is a comma list such as `50,100,150` |
 | 6 | `validate_pbs_scripts.py` | `mima_validate_pbs_scripts` | `paths` is a list; `check_fs` replaces `--check-fs` |
 | 7 | `submit_jobs.py` (dry run) | `mima_prepare_submission` | dry run only; see Submission |
+| 7 | `submit_jobs.py --execute` | `mima_submit_jobs` | asks the person to approve, then submits; see Submission. Give the same `run_dir`, `token`, `check_fs`, `project` and `queue` as the dry run |
 | 8 | `check_job_status.py` | `mima_check_job_status` | give `job_ids` or `record_path`, not both |
 | 9 | `check_outputs.py` | `mima_check_outputs` | `stage`, `directory`, `manifest` |
 | 9 | `scan_logs.py` | `mima_scan_logs` | `max_hits` (default 3, up to 50): raise it when you need every affected sample, not just the first three |
@@ -54,11 +55,26 @@ If `truncated` is true, the output was cut: narrow the request (one stage, one f
 
 ## What no tool does
 
-No tool runs a MIMA generator (`apptainer run --app ...`), a container, `qsub`, or anything that changes or deletes the user's files or jobs. The writers create new files only: `mima_write_prepared_inputs` makes corrected copies in a new folder, `mima_write_pbs_header` writes a new header file, and `mima_prepare_submission` writes its plan file. After `mima_build_commands`, give the user the commands to run themselves, after they have seen and approved them (Critical rule 4). Resume with `mima_validate_pbs_scripts` once the generator has written its scripts. `generate_module_docs.py` is a maintenance script and has no tool.
+No tool runs a MIMA generator (`apptainer run --app ...`) or a container, and none deletes, holds or alters the user's files or jobs. The only tool that queues jobs is `mima_submit_jobs`, and only after the person approves (see Submission). The writers create new files only: `mima_write_prepared_inputs` makes corrected copies in a new folder, `mima_write_pbs_header` writes a new header file, and `mima_prepare_submission` writes its plan file. After `mima_build_commands`, give the user the commands to run themselves, after they have seen and approved them (Critical rule 4). Resume with `mima_validate_pbs_scripts` once the generator has written its scripts. `generate_module_docs.py` is a maintenance script and has no tool.
 
 ## Submission
 
-`mima_prepare_submission` validates the scripts, writes `submission_plan.json` in the run folder, runs the dry run, and returns the qsub commands, a confirmation token and `run_yourself`: the exact `submit_jobs.py ... --execute` command. Nothing is submitted (`submitted` is false). Follow the protocol in `references/job-submission.md` unchanged: show the user the jobs and resources, ask a direct yes/no question, and only after a yes hand them `run_yourself` to run in their own terminal, where they type the confirmation. Do not try to submit by any other route, and never ask the server to bypass the typed confirmation.
+`mima_prepare_submission` validates the scripts, writes `submission_plan.json` in the run folder, runs the dry run, and returns the qsub commands, a confirmation token and `run_yourself`: the exact `submit_jobs.py ... --execute` command. Nothing is submitted (`submitted` is false). Follow the protocol in `references/job-submission.md`: show the user the jobs and resources and ask a direct question such as "Submit these 3 jobs now?".
+
+`mima_submit_jobs` submits that plan. Call it only after the user has reviewed the plan and clearly asked you to submit it. Calling it does not submit anything by itself: the program shows the user a prompt with the jobs and their resources, and the user must answer it themselves. You never see or give that answer, so never say or imply that the user approved. Read the result `status`:
+
+| status | What it means and what to say |
+|---|---|
+| `submitted` | The jobs are queued. Report `pbs_job_ids` and where `submission_record.json` is |
+| `partly_submitted` | Some jobs went in and one failed. Follow "If a submission stops part-way" in `references/job-submission.md` |
+| `not_submitted` | `qsub` refused the first job. Show the error text from `output`; nothing is queued |
+| `declined`, `cancelled` | The user chose not to submit, or closed the prompt. Nothing was submitted. Ask what they would like to change; do not call the tool again unless they ask you to |
+| `stale` | The scripts or plan changed after the dry run. Run `mima_prepare_submission` again and have the user review the new plan |
+| `invalid` | The plan no longer passes the dry run (for example a script was already submitted). Show the errors; never resubmit without the user's agreement |
+| `too_many_jobs` | The plan is larger than this server allows. Split it into smaller plans |
+| `disabled`, `approval_unavailable` | This server or this chat cannot ask the user, so nothing was submitted. Give them the `run_yourself` command from `mima_prepare_submission` to run in their own terminal, where they type the confirmation |
+
+Do not try to submit by any other route, and never ask the server to skip the user's prompt.
 
 ## When a tool refuses or fails
 

@@ -13,7 +13,7 @@ Read this before submitting anything. Submission changes the state of a shared c
 
 ## Who runs what
 
-Cluster commands run only through an execution tool that has access to the cluster (a terminal on the login node, or the project's MCP server when it is available). If you have no such tool, you cannot submit or check anything yourself. Give the user the exact commands, ask them to run them, and ask them to paste the output back. Do not describe a job as submitted unless a tool result shows it.
+Cluster commands run only through an execution tool that has access to the cluster (a terminal on the login node, or the project's MCP server when it is available). The server's `mima_submit_jobs` is the only tool that can queue jobs, and only after the user approves in its prompt. If you have no such tool, you cannot submit or check anything yourself. Give the user the exact commands, ask them to run them, and ask them to paste the output back. Do not describe a job as submitted unless a tool result shows it.
 
 ## The confirmation protocol
 
@@ -39,8 +39,9 @@ Follow these steps in order. None may be skipped, including for a single job.
 
    Then ask a direct question such as "Submit these 3 jobs now?". Only a clear yes to that question counts. Silence, a follow-up question, or approval of something else does not.
 5. **Execute.** What the controls do: the token ties execution to the exact plan and scripts the user reviewed, so any edit invalidates it. The token does not prove who approved. That is enforced by `--approval`:
-   - **Default (`tty`), preferred.** Give the user the command printed by the dry run (it already holds the token) and ask them to run it in their own terminal. The script shows the jobs and asks them to type `submit N`. It refuses unless a person is at an interactive terminal, so a tool that runs commands without one cannot complete it. This is enforced by the script, not by this guide.
-   - **`--approval harness`.** Only when your execution tool shows the user this exact command, including the flag and the token, and waits for their approval before running it. The approval is then enforced by that tool. Never add this flag to get past the typed confirmation, and never use it when the tool runs commands without asking.
+   - **Through the MCP server (`mima_submit_jobs`).** Call it only after the user has reviewed the plan and clearly asked you to submit. The program shows the user the jobs and their resources in a prompt of its own and the user answers it; the server submits only if they choose to. You cannot answer it, and a decline, a closed prompt, a client that cannot show the prompt, or a server with submission switched off all mean nothing was submitted. In that case use the next option.
+   - **By hand (`tty`), the fallback.** Give the user the command printed by the dry run (it already holds the token) and ask them to run it in their own terminal. The script shows the jobs and asks them to type `submit N`. It refuses unless a person is at an interactive terminal, so a tool that runs commands without one cannot complete it. This is enforced by the script, not by this guide.
+   - **`--approval harness`.** Used by the server's approval path above. Never add this flag yourself to get past the typed confirmation, and never use it when the tool runs commands without asking the user.
 6. **Report.** Give the PBS job ids, where `submission_record.json` is, and how to check status (`job-monitoring.md`). The record also logs the approval (mode, time, token and job ids).
 
 ## If a submission stops part-way

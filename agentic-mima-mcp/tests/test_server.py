@@ -26,7 +26,7 @@ from mima_mcp.server import mcp  # noqa: E402
 EXPECTED_TOOLS = {"mima_list_modules", "mima_build_commands", "mima_validate_manifest", "mima_validate_metadata", "mima_validate_pbs_config",
                   "mima_validate_pbs_scripts", "mima_estimate_read_length", "mima_check_outputs", "mima_check_job_status", "mima_scan_logs",
                   "mima_check_report", "mima_prepare_submission", "mima_prepare_inputs", "mima_write_prepared_inputs",
-                  "mima_plan_pbs_header", "mima_write_pbs_header"}
+                  "mima_plan_pbs_header", "mima_write_pbs_header", "mima_submit_jobs"}
 BRACKEN = ">> ERROR: Input file /scratch/x/kraken2/S1.kraken2.report does not exist"
 
 
@@ -101,6 +101,8 @@ class TestToolSurface(Base):
         names = asyncio.run(go())
         self.assertEqual(names, EXPECTED_TOOLS)
         self.assertFalse([n for n in names if "execute" in n or n in ("submit", "submit_jobs", "qsub", "mima_submit")])
+        # the only tool that can submit asks the person first (tests below), so it is named exactly once
+        self.assertEqual([n for n in names if "submit" in n and "prepare" not in n], ["mima_submit_jobs"])
 
     def test_annotations_match_behaviour(self):
         async def go():
@@ -114,7 +116,7 @@ class TestToolSurface(Base):
             self.assertTrue(name.startswith("mima_"), name)
             self.assertIs(d["destructiveHint"], False, name)
             self.assertIs(d["openWorldHint"], False, name)
-            self.assertIs(d["readOnlyHint"], name not in ("mima_prepare_submission", "mima_write_prepared_inputs", "mima_write_pbs_header"), name)
+            self.assertIs(d["readOnlyHint"], name not in ("mima_prepare_submission", "mima_write_prepared_inputs", "mima_write_pbs_header", "mima_submit_jobs"), name)
 
     def test_runner_refuses_execution_flags(self):
         for flag in ("--execute", "--confirm", "--approval", "--allow-resubmit", "--qsub"):
