@@ -58,7 +58,11 @@ Needs Python 3.10 or later for the server (the skill's scripts still run on 3.6+
 Client over SSH (UNTESTED; shown as the intended shape; needs non-interactive SSH login):
 
     command: ssh
-    args:    [gadi.nci.org.au, "MIMA_SKILL_DIR=$HOME/agentic-mima", "$HOME/mima-mcp-venv/bin/python", "-m", "mima_mcp"]
+    args:    [gadi.nci.org.au, "MIMA_SKILL_DIR=$HOME/agentic-mima", "FASTMCP_CHECK_FOR_UPDATES=off", "$HOME/mima-mcp-venv/bin/python", "-m", "mima_mcp"]
+
+Add `"MIMA_ALLOW_SUBMIT=1"` and `"MIMA_ALLOW_RUN=1"` to the arguments only for a test where the client can show approval prompts
+(a client that cannot simply gets `approval_unavailable`). Without them `mima_submit_jobs` and `mima_run_step` return `disabled`.
+The server also needs `apptainer` on its PATH for `mima_run_step` (on Gadi: `module load apptainer` first).
 
 ## Tests
 

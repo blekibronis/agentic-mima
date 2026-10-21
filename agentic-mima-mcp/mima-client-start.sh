@@ -12,6 +12,7 @@ cd "$here"
 if [ "$1" = "preflight" ]; then shift; exec python3 -m mima_client.preflight "$@"; fi
 # Submitting and running steps are switched on only for the chat client: the server then asks YOU to type SUBMIT or RUN first.
 export MIMA_ALLOW_SUBMIT="${MIMA_ALLOW_SUBMIT:-1}"
+export FASTMCP_CHECK_FOR_UPDATES=off
 export MIMA_ALLOW_RUN="${MIMA_ALLOW_RUN:-1}"
 command -v apptainer >/dev/null 2>&1 || { type module >/dev/null 2>&1 && module load apptainer 2>/dev/null || true; }
 exec python3 -m mima_client "$@"

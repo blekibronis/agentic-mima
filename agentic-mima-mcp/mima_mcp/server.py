@@ -652,7 +652,7 @@ def main(argv=None):
         print(f"OK: {len(STATUS)} scripts found in {folder}")
         return
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(asctime)s %(name)s %(message)s")
-    mcp.run()
+    mcp.run(show_banner=False)  # no banner; stdout is the protocol channel
 
 
 if __name__ == "__main__":
