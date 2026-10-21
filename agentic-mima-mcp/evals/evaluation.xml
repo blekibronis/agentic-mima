@@ -1,6 +1,6 @@
 <evaluation>
   <qa_pair>
-    <question>Two manifests for the next QC run are in /tmp/mima_eval/manifests. Only one of them is safe to pass to the pipeline as it is. Give the file name of the safe one, nothing else.</question>
+    <question>Two manifests for the next QC run are /tmp/mima_eval/manifests/manifest_run1.csv and /tmp/mima_eval/manifests/manifest_run2.csv. Only one of them is safe to pass to the pipeline as it is. Give the file name of the safe one, nothing else.</question>
     <answer>manifest_run1.csv</answer>
   </qa_pair>
   <qa_pair>
