@@ -26,7 +26,7 @@ from mima_mcp.server import mcp  # noqa: E402
 EXPECTED_TOOLS = {"mima_list_modules", "mima_build_commands", "mima_validate_manifest", "mima_validate_metadata", "mima_validate_pbs_config",
                   "mima_validate_pbs_scripts", "mima_estimate_read_length", "mima_check_outputs", "mima_check_job_status", "mima_scan_logs",
                   "mima_check_report", "mima_prepare_submission", "mima_prepare_inputs", "mima_write_prepared_inputs",
-                  "mima_plan_pbs_header", "mima_write_pbs_header", "mima_submit_jobs"}
+                  "mima_plan_pbs_header", "mima_write_pbs_header", "mima_submit_jobs", "mima_run_step"}
 BRACKEN = ">> ERROR: Input file /scratch/x/kraken2/S1.kraken2.report does not exist"
 
 
@@ -116,7 +116,7 @@ class TestToolSurface(Base):
             self.assertTrue(name.startswith("mima_"), name)
             self.assertIs(d["destructiveHint"], False, name)
             self.assertIs(d["openWorldHint"], False, name)
-            self.assertIs(d["readOnlyHint"], name not in ("mima_prepare_submission", "mima_write_prepared_inputs", "mima_write_pbs_header", "mima_submit_jobs"), name)
+            self.assertIs(d["readOnlyHint"], name not in ("mima_prepare_submission", "mima_write_prepared_inputs", "mima_write_pbs_header", "mima_submit_jobs", "mima_run_step"), name)
 
     def test_runner_refuses_execution_flags(self):
         for flag in ("--execute", "--confirm", "--approval", "--allow-resubmit", "--qsub"):

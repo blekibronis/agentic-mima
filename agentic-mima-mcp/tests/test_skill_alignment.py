@@ -44,7 +44,7 @@ class TestSkillAlignment(unittest.TestCase):
         self.assertIn("never ask the server to skip the user's prompt", DOC.lower().replace("\n", " "))
         self.assertIn("never answer that prompt", SKILL_MD.lower().replace("\n", " ").replace("you never answer that prompt", "never answer that prompt"))
         for word in ("submitted", "partly_submitted", "not_submitted", "declined", "cancelled", "stale", "invalid",
-                     "too_many_jobs", "disabled", "approval_unavailable"):
+                     "too_many_jobs", "disabled", "approval_unavailable", "ran", "failed", "tool_error"):
             self.assertIn(f"`{word}`", DOC, word)
         self.assertNotIn("--approval harness", DOC.replace("never use `--approval harness`", ""))
 

@@ -66,7 +66,7 @@ async def run(args):
     url = args.base_url.rstrip("/") + "/chat/completions"
     report, correct = [], 0
     async with Client(mcp) as client:
-        specs = tool_specs(await client.list_tools(), () if args.allow_prepare_submission else ("mima_prepare_submission", "mima_submit_jobs", "mima_write_prepared_inputs", "mima_write_pbs_header"))
+        specs = tool_specs(await client.list_tools(), () if args.allow_prepare_submission else ("mima_prepare_submission", "mima_submit_jobs", "mima_run_step", "mima_write_prepared_inputs", "mima_write_pbs_header"))
         print("tools offered: %d" % len(specs))
         for num, q, expected in questions:
             msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": q}]

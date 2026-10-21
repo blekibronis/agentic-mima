@@ -30,7 +30,7 @@ Never say a job was submitted, finished or succeeded unless a tool result or pas
 1. Generate every command with `scripts/build_command.py`. Never hand-write an `apptainer` command or add a parameter that is not in `references/module-parameters.md`.
 2. Never guess inputs. Database paths, the host genome, PBS config files, the group column and its levels must come from the user.
 3. Use absolute paths, and state every default and assumption in the reply.
-4. Never run a MIMA command (generator or direct run) until the user has seen it and approved running it. These commands write into the user's directories.
+4. Never run a MIMA command (generator or direct run) until the user has seen it and approved running it. These commands write into the user's directories. When the `mima_run_step` tool is available, call it for one step at a time after the user has seen the command and asked you to run it; the program then asks the user to approve in their own prompt, and you never answer it. Without that tool, give the user the command to run.
 5. Never submit a job without the confirmation protocol in `references/job-submission.md`: validate, dry run, show the user the exact jobs, and ask a direct question. Submit only through `scripts/submit_jobs.py`. When the `mima_submit_jobs` tool is available, call it only after the user has reviewed the plan and clearly asked you to submit; the program then asks the user to approve in their own prompt, and nothing is submitted unless they do. You never answer that prompt, never infer approval from a thank-you, a follow-up question or silence, and never describe jobs as submitted unless the tool result says `submitted`. Without that tool, hand the user the command to run in their own terminal. Never use `--approval harness` yourself to bypass either.
 6. Never delete, hold or alter jobs, edit generated scripts to pass validation, or resubmit without the user's agreement. Give them the command instead.
 7. Monitoring is read-only. Base every statement about a job or output on tool output, and quote file names and lines.
@@ -109,7 +109,7 @@ python3 scripts/build_command.py plan.json
 
 ### Step 5: Present the plan and commands
 
-Use `assets/plan-template.md`: goal, inputs and their validation status, ordered steps with their kind, assumptions and defaults, the builder's commands unchanged, and checks left for the cluster. Ask whether to run the first stage's commands. Stop here if the user only wanted a plan.
+Use `assets/plan-template.md`: goal, inputs and their validation status, ordered steps with their kind, assumptions and defaults, the builder's commands unchanged, and checks left for the cluster. Ask whether to run the first stage's commands (with `mima_run_step`, one step per call; the user approves each in the program's prompt). Stop here if the user only wanted a plan.
 
 ### Step 6: Validate the generated PBS scripts
 
@@ -123,7 +123,7 @@ It catches leftover placeholders (an unedited `APPTAINER_BIND` or `IMAGE_DIR`), 
 
 ### Step 7: Submit, only with confirmation
 
-Read `references/job-submission.md` and follow the protocol exactly: validate, write the submission plan, run the dry run, show the user the jobs and resources, ask a direct yes/no question, then give the user the dry run's `--execute` command to run in their terminal, where they type the confirmation. Expected output: the dry run ends with `DRY RUN ONLY` and a token; the real run, after the person types the confirmation, prints one `submitted as JOBID` line per job and writes the record file. Report the PBS job ids and the record file.
+Read `references/job-submission.md` and follow the protocol exactly: validate, write the submission plan, run the dry run, show the user the jobs and resources, ask a direct yes/no question, then, with `mima_submit_jobs`, call it so the program asks the user to approve (you never answer that prompt); without it, give the user the dry run's `--execute` command to run in their terminal, where they type the confirmation. Expected output: the dry run ends with `DRY RUN ONLY` and a token; the real run, after the person approves, prints one `submitted as JOBID` line per job and writes the record file. Report the PBS job ids and the record file.
 
 ### Step 8: Monitor
 
@@ -156,7 +156,7 @@ Result: one validated `mima-visualisation` command, with the group column and le
 
 **Example 4: submit after generation**
 User says: "The QC scripts are generated, go ahead and submit them."
-Actions: run `validate_pbs_scripts.py --check-fs`; write the submission plan; dry run; show 3 jobs with their resources and the `qsub` commands; ask "Submit these 3 jobs now?"; on a clear yes, give the user the dry run's `--execute` command to run in their terminal and tell them to type `submit 3` when asked; once they report back, check the record.
+Actions: run `validate_pbs_scripts.py --check-fs`; write the submission plan; dry run; show 3 jobs with their resources and the `qsub` commands; ask "Submit these 3 jobs now?"; on a clear yes, call `mima_submit_jobs` so the program asks the user to approve (or, without that tool, give them the dry run's `--execute` command to type `submit 3` in their terminal); check the record.
 Result: jobs submitted exactly as reviewed, by the person's own confirmation, with a record file. If the answer is anything other than yes, or the person does not type the confirmation, nothing is submitted.
 
 **Example 5: a failed job**
