@@ -92,9 +92,13 @@ class FakeModel(BaseHTTPRequestHandler):
         msgs = body["messages"]
         last = msgs[-1]
         usage = {"prompt_tokens": 9000, "completion_tokens": 20, "total_tokens": 9020}
-        if last["role"] == "tool":
+        bracken = "mima-bracken-report" in msgs[1]["content"]
+        if bracken and self.flow == "lookup_first" and last["role"] != "tool":
+            msg = {"role": "assistant", "content": None, "tool_calls": [{"id": "l", "type": "function", "function": {
+                "name": "mima_list_modules", "arguments": "{}"}}]}
+        elif last["role"] == "tool" and not bracken:
             msg = {"role": "assistant", "content": "There are nine modules."}
-        elif "mima-bracken-report" in last["content"]:
+        elif bracken:
             plan = {"module": "mima-bracken-report", "params": {"-i": "/scratch/mp96/demo/Taxonomy_profiling"}}
             if self.flow == "bad":
                 plan = "mima-bracken-report"
@@ -128,6 +132,12 @@ class Preflight(unittest.TestCase):
         self.assertIn("RESULT: READY", out)
         self.assertIn("reasoning_content", out)  # the reply's extra field is reported
         self.assertIn("9000 tokens", out)
+
+    def test_looking_up_module_names_first_is_fine(self):
+        """The skill says to check module names with mima_list_modules; a model that does so before building is correct."""
+        code, out = self.run_it("lookup_first")
+        self.assertEqual(code, 0, out)
+        self.assertIn("after: mima_list_modules, mima_build_commands", out)
 
     def test_not_ready_when_the_model_name_is_wrong_or_the_plan_is_not_an_object(self):
         code, out = self.run_it("good", model="other")
