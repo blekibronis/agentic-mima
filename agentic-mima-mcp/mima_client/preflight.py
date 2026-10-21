@@ -10,7 +10,10 @@ import os
 import sys
 from pathlib import Path
 
+from .agent import READ_TOOL, read_skill_file
 from .llm import LLMError, get, post, result_text
+
+LOOKUPS = ("mima_list_modules", READ_TOOL)  # read-only; allowed before the build call
 
 
 def line(ok, text):
@@ -84,20 +87,28 @@ async def run(a):
                 results.append(line(bool(text.strip()) and not final.get("tool_calls"), "final answer after the result: %r" % text[:160]))
 
         print("3. A nested argument")
-        # The skill tells the model to check module names with mima_list_modules, so looking them up first is correct.
-        # Let it do that (read-only, up to 3 rounds) and judge the first mima_build_commands call.
+        # The skill tells the model to check module names (mima_list_modules) and parameters (reference files, read with
+        # skill_read_file) before building, so looking them up first is correct. Let it do that (read-only, up to 4 rounds)
+        # and judge the first mima_build_commands call.
         msgs, r = ask("Build the command for the mima-bracken-report module with input folder /scratch/mp96/demo/Taxonomy_profiling. Use the tool; do not write the command yourself.")
         build, seen = None, []
-        for _ in range(3):
+        for _ in range(4):
             msg = r["choices"][0]["message"]
             calls = msg.get("tool_calls") or []
             seen += [c["function"]["name"] for c in calls]
             build = next((c for c in calls if c["function"]["name"] == "mima_build_commands"), None)
-            if build or not calls or any(c["function"]["name"] != "mima_list_modules" for c in calls):
+            if build or not calls or any(c["function"]["name"] not in LOOKUPS for c in calls):
                 break
             msgs.append({k: v for k, v in msg.items() if v is not None and k not in ("reasoning_content", "reasoning")})
             for c in calls:
-                out = result_text(await client.call_tool("mima_list_modules", {}, raise_on_error=False), 12000)
+                if c["function"]["name"] == READ_TOOL:
+                    try:
+                        rel = json.loads(c["function"].get("arguments") or "{}").get("path", "")
+                    except (ValueError, AttributeError):
+                        rel = ""
+                    out = read_skill_file(skill, rel)[1]
+                else:
+                    out = result_text(await client.call_tool("mima_list_modules", {}, raise_on_error=False), 12000)
                 msgs.append({"role": "tool", "tool_call_id": c.get("id", "x"), "content": out})
             r = post(url, {"model": a.model, "messages": msgs, "tools": agent.specs, "tool_choice": "auto"}, a.api_key, a.timeout)
         good = False
