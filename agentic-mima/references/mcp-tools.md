@@ -15,6 +15,7 @@ When your tool list contains tools named `mima_*`, the project's MCP server is c
 |---|---|---|---|
 | 4 | `build_command.py --list-modules` | `mima_list_modules` | none |
 | 4 | `build_command.py PLAN.json` | `mima_build_commands` | pass the plan as an object (`plan`), not a file. `check_fs=true` only works when the server runs on the machine that holds the data |
+| 5 | the printed MIMA command, run by hand | `mima_run_step` | asks the person to approve, then runs ONE step in the container on this machine; see Running a step. Give `step` (as for `mima_build_commands`), `image_path` and `bind_paths` |
 | 3 | `prepare_inputs.py` (dry run) | `mima_prepare_inputs` | writes nothing. Give `manifest_path` or `from_reads_dir`, plus `out_dir` (a new folder), and optionally `reads_dir` and `metadata_path` |
 | 3 | `prepare_inputs.py --apply` | `mima_write_prepared_inputs` | same arguments as the preview. Writes corrected copies into `out_dir`; ask the user first. Originals are never changed |
 | 3 | `make_pbs_header.py` (dry run) | `mima_plan_pbs_header` | writes nothing. Give `module` (`qc`, `taxa` or `func`), `samples` or `manifest_path`, `image_path`, `paths` (a list of every folder the job uses), `project`, and optionally `queue`, `cpus`, `reads_dir` (to scale qc and func by file size) and `num_pbs_jobs` (qc). Missing facts come back as `needs_input`: ask the user |
@@ -55,7 +56,7 @@ If `truncated` is true, the output was cut: narrow the request (one stage, one f
 
 ## What no tool does
 
-No tool runs a MIMA generator (`apptainer run --app ...`) or a container, and none deletes, holds or alters the user's files or jobs. The only tool that queues jobs is `mima_submit_jobs`, and only after the person approves (see Submission). The writers create new files only: `mima_write_prepared_inputs` makes corrected copies in a new folder, `mima_write_pbs_header` writes a new header file, and `mima_prepare_submission` writes its plan file. After `mima_build_commands`, give the user the commands to run themselves, after they have seen and approved them (Critical rule 4). Resume with `mima_validate_pbs_scripts` once the generator has written its scripts. `generate_module_docs.py` is a maintenance script and has no tool.
+Only `mima_run_step` runs a MIMA command (`apptainer run --app ...`), one validated step at a time and only after the person approves (see Running a step); none deletes, holds or alters the user's files or jobs. The only tool that queues jobs is `mima_submit_jobs`, and only after the person approves (see Submission). The writers create new files only: `mima_write_prepared_inputs` makes corrected copies in a new folder, `mima_write_pbs_header` writes a new header file, and `mima_prepare_submission` writes its plan file. After `mima_build_commands`, give the user the commands to run themselves, after they have seen and approved them (Critical rule 4). Resume with `mima_validate_pbs_scripts` once the generator has written its scripts. `generate_module_docs.py` is a maintenance script and has no tool.
 
 ## Submission
 
@@ -75,6 +76,20 @@ No tool runs a MIMA generator (`apptainer run --app ...`) or a container, and no
 | `disabled`, `approval_unavailable` | This server or this chat cannot ask the user, so nothing was submitted. Give them the `run_yourself` command from `mima_prepare_submission` to run in their own terminal, where they type the confirmation |
 
 Do not try to submit by any other route, and never ask the server to skip the user's prompt.
+
+## Running a step
+
+`mima_run_step` takes one step in the same form as `mima_build_commands`, builds and checks the command with the same code, and runs it on this machine inside the container with `SANDBOX` set to `image_path` and `APPTAINER_BIND` set to `bind_paths` (give the same folders and image as in the PBS header). You cannot pass a command of your own. Calling it does not run anything by itself: the program shows the user the exact command and the user must approve. Use it for the generators (`qc`, `taxa`, `func` only write PBS scripts) and the command-line stages. They run on the login node, so it stops them after `timeout_minutes` (default 30). Read the result `status`:
+
+| status | What it means and what to say |
+|---|---|
+| `ran` | The command exited with 0. Quote the end of `output`. After a generator, validate the new scripts with `mima_validate_pbs_scripts` |
+| `failed` | The command exited with an error. Show the end of `output` and `stderr` and use `references/troubleshooting.md`; never rerun unchanged |
+| `timeout` | Stopped at the time limit. Say so and check what was written before anything is rerun |
+| `declined`, `cancelled` | The user chose not to run it. Nothing ran. Ask what to change |
+| `invalid` | The plan failed its checks. Show the errors and fix the plan; the user was not asked |
+| `disabled`, `approval_unavailable` | Running is off, or this chat cannot ask the user. Give them the command from `mima_build_commands` to run themselves |
+| `tool_error` | For example `apptainer` is not on the path. Say so; on Gadi the server must be started after `module load apptainer` |
 
 ## When a tool refuses or fails
 

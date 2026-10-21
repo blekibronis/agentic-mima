@@ -24,6 +24,7 @@ checks arguments, runs one script, and returns its exit code, a status word and 
 | `mima_plan_pbs_header` | make_pbs_header (preview) | nothing | prepared, needs_input, invalid |
 | `mima_write_pbs_header` | make_pbs_header `--apply` | a NEW PBS header file (`out_file`); never overwrites | prepared, needs_input, invalid |
 | `mima_prepare_submission` | submit_jobs **dry run** | writes `submission_plan.json` in `run_dir` | dry_run_ok, invalid, bad_plan |
+| `mima_run_step` | build_command, then the command it prints | runs ONE validated MIMA step in the container **only after the person approves**; off unless `MIMA_ALLOW_RUN=1`; needs `apptainer` on PATH | ran, failed, timeout, invalid, declined, cancelled, disabled, approval_unavailable, tool_error |
 | `mima_submit_jobs` | submit_jobs `--execute` | queues the prepared jobs **only after the person approves in the client's prompt**; off unless `MIMA_ALLOW_SUBMIT=1` | submitted, partly_submitted, not_submitted, declined, cancelled, stale, invalid, too_many_jobs, disabled, approval_unavailable |
 
 ## Safety design
@@ -37,6 +38,7 @@ checks arguments, runs one script, and returns its exit code, a status word and 
   `mima_client` shows the prompt and accepts only `SUBMIT` typed in capitals. The runner still refuses `--execute`, `--confirm`,
   `--approval`, `--allow-resubmit` and `--qsub` in every ordinary call; the one approved path fixes its own arguments and can never
   resubmit a recorded script. Third-party clients (Kimi Code, Claude) must support elicitation for this to work; test that before enabling.
+* **Running a step works the same way.** `mima_run_step` accepts one plan step, builds the command with the same checked code as `mima_build_commands` (the model cannot supply a command), shows it, and runs it with `bash -c` only after the person picks "Run this step now" (`mima_client`: type `RUN`). Off unless `MIMA_ALLOW_RUN=1`; stops after `timeout_minutes`; runs on the machine the server runs on (the login node on Gadi), so it suits the generators and short stages. Whether the analysis stages (diversity, classifier) should instead be PBS jobs is for Dr Jiang to decide.
 * Only scripts on an allow-list run, from `$MIMA_SKILL_DIR/scripts`, with a fixed argument list (no shell).
 * Paths must be absolute, may not start with `-`, and (when `MIMA_ALLOWED_ROOTS` is set) must resolve inside those
   folders, symlinks included. Job ids and plan fields are checked against patterns.
@@ -56,7 +58,11 @@ Needs Python 3.10 or later for the server (the skill's scripts still run on 3.6+
 Client over SSH (UNTESTED; shown as the intended shape; needs non-interactive SSH login):
 
     command: ssh
-    args:    [gadi.nci.org.au, "MIMA_SKILL_DIR=$HOME/agentic-mima", "$HOME/mima-mcp-venv/bin/python", "-m", "mima_mcp"]
+    args:    [gadi.nci.org.au, "MIMA_SKILL_DIR=$HOME/agentic-mima", "FASTMCP_CHECK_FOR_UPDATES=off", "$HOME/mima-mcp-venv/bin/python", "-m", "mima_mcp"]
+
+Add `"MIMA_ALLOW_SUBMIT=1"` and `"MIMA_ALLOW_RUN=1"` to the arguments only for a test where the client can show approval prompts
+(a client that cannot simply gets `approval_unavailable`). Without them `mima_submit_jobs` and `mima_run_step` return `disabled`.
+The server also needs `apptainer` on its PATH for `mima_run_step` (on Gadi: `module load apptainer` first).
 
 ## Tests
 

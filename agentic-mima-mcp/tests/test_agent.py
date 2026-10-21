@@ -83,7 +83,7 @@ class AgentTest(unittest.TestCase):
         self.assertIn("=== SKILL.md ===", system)
         self.assertIn("name: agentic-mima", system)
         offered = {t["function"]["name"] for t in Scripted.seen[0]["tools"]}
-        self.assertEqual(len(offered), 18)  # 17 MCP tools + the reference reader
+        self.assertEqual(len(offered), 19)  # 18 MCP tools + the reference reader
         self.assertIn(READ_TOOL, offered)
         self.assertEqual([e["name"] for e in events if e["event"] == "tool"], [READ_TOOL, "mima_list_modules"])
         tool_msgs = [m for m in agent.messages if m["role"] == "tool"]
