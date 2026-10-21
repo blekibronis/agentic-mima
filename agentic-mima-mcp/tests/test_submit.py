@@ -219,5 +219,123 @@ class TestClientApprovalPrompt(unittest.TestCase):
         self.assertEqual(asyncio.run(h("x", None, Empty(), None)).action, "decline")
 
 
+
+RUN, NO_RUN = "Run this step now", "Do NOT run"
+FAKE_APPTAINER = """#!/bin/sh
+echo "ARGS: $@"
+echo "SANDBOX=$SANDBOX"
+echo "BIND=$APPTAINER_BIND"
+exit ${FAKE_EXIT:-0}
+"""
+
+
+class TestRunStep(Base):
+    """mima_run_step: one validated command, only after the person approves; a fake apptainer records what it was given."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("MIMA_ALLOW_RUN", None)
+        os.environ.pop("FAKE_EXIT", None)
+        fake = self.tmp / "bin" / "apptainer"
+        fake.write_text(FAKE_APPTAINER)
+        fake.chmod(0o755)
+        self.image = self.tmp / "mima.sif"
+        self.image.write_text("x")
+        self.work = self.tmp / "work"
+        self.work.mkdir()
+        self.step = {"module": "mima-qc", "params": {"-i": str(self.work / "raw"), "-o": str(self.work / "out"),
+                                                      "-m": str(self.work / "manifest.csv"), "--ref": str(self.work / "ref.fna"),
+                                                      "--mode": "container", "--pbs-config": str(self.work / "pbs_header_qc.cfg")}}
+
+    def run_step(self, handler=None, mode="legacy", **extra):
+        args = {"step": self.step, "image_path": str(self.image), "bind_paths": [str(self.work)], "check_fs": False}
+        args.update(extra)
+        return self.run_tool("mima_run_step", args, handler, mode=mode)
+
+    def test_disabled_by_default(self):
+        seen = []
+        r = self.run_step(answering(RUN, seen))
+        self.assertEqual((r["status"], r["ran"]), ("disabled", False))
+        self.assertEqual(seen, [])
+
+    def test_approved_step_runs_with_the_container_environment(self):
+        os.environ["MIMA_ALLOW_RUN"] = "1"
+        seen = []
+        r = self.run_step(answering(RUN, seen))
+        self.assertEqual(r["status"], "ran", r)
+        self.assertTrue(r["ran"])
+        self.assertIn("ARGS: run --app mima-qc " + str(self.image), r["output"])
+        self.assertIn("SANDBOX=" + str(self.image), r["output"])
+        self.assertIn("BIND=" + str(self.work), r["output"])
+        self.assertIn("APPROVAL NEEDED", seen[0])
+        self.assertIn("apptainer run --app mima-qc", seen[0])
+        self.assertIn(str(self.work / "raw"), seen[0])
+
+    def test_nonzero_exit_is_reported_as_failed(self):
+        os.environ["MIMA_ALLOW_RUN"] = "1"
+        os.environ["FAKE_EXIT"] = "3"
+        r = self.run_step(answering(RUN))
+        self.assertEqual((r["status"], r["exit_code"]), ("failed", 3))
+
+    def test_decline_cancel_and_no_prompt_run_nothing(self):
+        os.environ["MIMA_ALLOW_RUN"] = "1"
+        for handler, mode, want in ((acting("decline"), "legacy", "declined"), (answering(NO_RUN), "legacy", "declined"),
+                                    (acting("cancel"), "legacy", "cancelled"), (None, "legacy", "approval_unavailable"),
+                                    (answering(RUN), "auto", "approval_unavailable")):
+            r = self.run_step(handler, mode)
+            self.assertEqual(r["status"], want, r)
+            self.assertFalse(r["ran"])
+            self.assertNotIn("ARGS:", r.get("output", ""))
+
+    def test_invalid_plan_is_never_offered_to_the_person(self):
+        os.environ["MIMA_ALLOW_RUN"] = "1"
+        self.step["params"]["--not-a-flag"] = "x"
+        seen = []
+        r = self.run_step(answering(RUN, seen))
+        self.assertEqual(r["status"], "invalid", r)
+        self.assertEqual(seen, [])
+
+    def test_only_one_known_module_and_a_real_image_are_accepted(self):
+        os.environ["MIMA_ALLOW_RUN"] = "1"
+        self.step["module"] = "rm -rf /"
+        r = self.run_step(answering(RUN))
+        self.assertEqual((r["status"], r["ran"]), ("invalid", False))
+        self.step["module"] = "mima-qc"
+        bad = self.run_tool("mima_run_step", {"step": self.step, "image_path": str(self.tmp / "x.txt"), "bind_paths": [str(self.work)]},
+                            answering(RUN), mode="legacy")
+        self.assertIsNone(bad)  # tool error: image is not an existing .sif
+
+    def test_missing_apptainer_is_a_clear_tool_error(self):
+        os.environ["MIMA_ALLOW_RUN"] = "1"
+        (self.tmp / "bin" / "apptainer").unlink()
+        saved = os.environ["PATH"]
+        os.environ["PATH"] = str(self.tmp / "bin") + os.pathsep + "/nonexistent"
+        try:
+            r = self.run_step(answering(RUN))
+        finally:
+            os.environ["PATH"] = saved
+        self.assertEqual(r["status"], "tool_error")
+        self.assertIn("module load apptainer", r["note"])
+
+    def test_timeout_stops_the_step(self):
+        os.environ["MIMA_ALLOW_RUN"] = "1"
+        (self.tmp / "bin" / "apptainer").write_text("#!/bin/sh\nsleep 30\n")
+        from mima_mcp import runner
+        result = asyncio.run(runner.run_built_command("apptainer run x", str(self.image), [str(self.work)], timeout=1))
+        self.assertEqual(result["status"], "timeout")
+
+
+class TestPromptWord(unittest.TestCase):
+    class Params:
+        requestedSchema = {"type": "object", "properties": {"value": {"type": "string", "enum": [RUN, NO_RUN]}}}
+
+    def test_run_prompt_needs_the_word_run(self):
+        said = []
+        h = make_handler(ask=lambda p: "RUN", say=said.append, has_terminal=lambda: True)
+        self.assertEqual(asyncio.run(h("x", None, self.Params(), None)), RUN)
+        h = make_handler(ask=lambda p: "SUBMIT", say=said.append, has_terminal=lambda: True)
+        self.assertEqual(asyncio.run(h("x", None, self.Params(), None)).action, "decline")
+
+
 if __name__ == "__main__":
     unittest.main()

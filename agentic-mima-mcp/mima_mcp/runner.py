@@ -5,8 +5,8 @@ This module is the only place that starts a process. Rules it enforces:
   * the command is a fixed argument list, never a shell string;
   * path and token arguments are checked before they reach a script;
   * run_script runs submit_jobs.py only as a dry run: --execute, --confirm, --approval, --allow-resubmit and --qsub
-    are refused there. The one way to submit is run_approved_submission, which the server calls only after
-    a person approves through the client's own prompt (see mima_submit_jobs).
+    are refused there. The one way to submit is run_approved_submission, and the one way to run a MIMA command is
+    run_built_command; the server calls each only after a person approves through the client's own prompt.
 """
 import asyncio
 import json
@@ -128,13 +128,13 @@ async def run_approved_submission(plan, record, token, project=None, queue=None,
     try:
         proc = await asyncio.create_subprocess_exec(*argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout)
-    except OSError as exc:
-        result.update(exit_code=None, status="tool_error", output="", stderr=str(exc))
-        return result
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError:  # before OSError: on Python 3.11+ TimeoutError is a kind of OSError
         proc.kill()
         await proc.wait()
         result.update(exit_code=None, status="timeout", output="", stderr=f"timed out after {timeout}s; check the record file before retrying")
+        return result
+    except OSError as exc:
+        result.update(exit_code=None, status="tool_error", output="", stderr=str(exc))
         return result
     out = out_b.decode("utf-8", "replace")[:MAX_OUTPUT]
     ids = re.findall(r"^\[([A-Za-z0-9_-]+)\] submitted as (\S+)$", out, re.M)
@@ -142,6 +142,35 @@ async def run_approved_submission(plan, record, token, project=None, queue=None,
     result.update(exit_code=proc.returncode, status=status, output=out, stderr=err_b.decode("utf-8", "replace")[-4000:],
                   pbs_job_ids={i: j for i, j in ids})
     log.info("submit_jobs (approved) exit=%s status=%s jobs=%s", proc.returncode, status, len(ids))
+    return result
+
+
+async def run_built_command(command, image, binds, timeout=1800):
+    """Run a command produced by build_command.py, exactly as a person pasting it into a shell would.
+
+    Call this ONLY after a person has approved the command through the client's own prompt. The command text comes from
+    build_command.py (every value type-checked and shell-quoted there), never from the model. SANDBOX and APPTAINER_BIND
+    are set in the environment, as the MIMA tutorial does by hand."""
+    env = dict(os.environ, SANDBOX=image, APPTAINER_BIND=",".join(binds))
+    result = {"script": "build_command", "command": command, "truncated": False}
+    try:
+        proc = await asyncio.create_subprocess_exec("/bin/bash", "-c", command, stdin=asyncio.subprocess.DEVNULL,
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env)
+        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:  # before OSError: on Python 3.11+ TimeoutError is a kind of OSError
+        proc.kill()
+        await proc.wait()
+        result.update(exit_code=None, status="timeout", output="", stderr=f"stopped after {timeout // 60} minutes; check what was written before running it again")
+        return result
+    except OSError as exc:
+        result.update(exit_code=None, status="tool_error", output="", stderr=str(exc))
+        return result
+    out = out_b.decode("utf-8", "replace")
+    if len(out) > MAX_OUTPUT:
+        out, result["truncated"] = out[-MAX_OUTPUT:], True
+    result.update(exit_code=proc.returncode, status="ran" if proc.returncode == 0 else "failed", output=out,
+                  stderr=err_b.decode("utf-8", "replace")[-4000:])
+    log.info("approved step exit=%s", proc.returncode)
     return result
 
 

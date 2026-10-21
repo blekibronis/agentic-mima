@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -27,7 +28,7 @@ from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from .runner import STATUS, check_path, check_token, run_approved_submission, run_json_script, run_script, scripts_dir
+from .runner import STATUS, check_path, check_token, run_approved_submission, run_built_command, run_json_script, run_script, scripts_dir
 
 log = logging.getLogger("mima_mcp")  # stderr only: stdout belongs to the MCP protocol
 
@@ -38,6 +39,8 @@ WRITES_PLAN = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=Tru
 WRITES_COPIES = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 # mima_submit_jobs queues jobs, but only after the person approves through the client's prompt; it deletes nothing.
 SUBMITS = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
+# mima_run_step runs one validated MIMA command in the container, only after the person approves; the pipeline itself writes into the user's output folders.
+RUNS = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 
 mcp = FastMCP(
     "mima_mcp",
@@ -479,6 +482,23 @@ def _pbs_summary(script):
     return "; ".join(keep) or "(no #PBS resource lines)"
 
 
+async def _ask_person(ctx, message, yes_choice, no_choice):
+    """Show the person a two-choice prompt through the client. Returns approved, declined, cancelled or unavailable.
+
+    Only the exact yes_choice counts as approval. A client that cannot ask (or speaks only the newest protocol era,
+    which has no prompt) gives unavailable, and every caller treats that as "do nothing"."""
+    try:
+        answer = await ctx.elicit(message, response_type=[yes_choice, no_choice])
+    except Exception as exc:  # the client cannot ask: fail closed
+        log.warning("approval prompt failed: %s", type(exc).__name__)
+        return "unavailable"
+    if answer.action == "cancel":
+        return "cancelled"
+    if answer.action == "accept" and getattr(answer, "data", None) == yes_choice:
+        return "approved"
+    return "declined"
+
+
 @_tool("mima_submit_jobs", "Submit prepared jobs after the person approves", SUBMITS)
 async def mima_submit_jobs(
     run_dir: Annotated[str, Field(description="The same run_dir given to mima_prepare_submission", min_length=2, max_length=1024)],
@@ -529,21 +549,87 @@ async def mima_submit_jobs(
     message = (f"APPROVAL NEEDED. Submit {len(jobs)} job(s) to the cluster queue? {where}".rstrip() + "\n"
                + "\n".join(f"  {j['id']}: {j['script']}\n      {_pbs_summary(j['script'])}" for j in jobs)
                + "\nChoose '" + submit_choice + "' only if you have reviewed these jobs.")
-    try:
-        answer = await ctx.elicit(message, response_type=[submit_choice, cancel_choice])
-    except Exception as exc:  # the client cannot ask: fail closed
-        log.warning("approval prompt failed: %s", type(exc).__name__)
+    verdict = await _ask_person(ctx, message, submit_choice, cancel_choice)
+    if verdict == "unavailable":
         out.update(status="approval_unavailable", note="This client cannot ask the person for approval, so nothing was submitted. "
                    "Give the person the run_yourself command from mima_prepare_submission.")
         return out
-    if answer.action == "cancel":
+    if verdict == "cancelled":
         out.update(status="cancelled", note="The approval prompt was dismissed. Nothing was submitted.")
         return out
-    if answer.action != "accept" or getattr(answer, "data", None) != submit_choice:
+    if verdict != "approved":
         out.update(status="declined", note="The person did not approve. Nothing was submitted.")
         return out
     res = await run_approved_submission(plan, record, token, project, queue, check_fs)
     res["submitted"] = res["status"] in ("submitted", "partly_submitted")
+    res["approved_by"] = "person, through the client approval prompt"
+    return res
+
+
+def _run_enabled():
+    return os.environ.get("MIMA_ALLOW_RUN") == "1"
+
+
+@_tool("mima_run_step", "Run one MIMA step after the person approves", RUNS)
+async def mima_run_step(
+    step: Annotated[dict, Field(description='ONE step exactly as for mima_build_commands: {"module": "mima-qc", "params": {"-i": "/abs/dir", ...}}. Several steps are not accepted; run them one at a time.')],
+    image_path: Annotated[str, Field(description="Absolute path of the MIMA container image (.sif), the same one used in the PBS header", min_length=2, max_length=1024)],
+    bind_paths: Annotated[list[str], Field(description="Every folder the step reads or writes, as absolute paths (the same folders given to mima_plan_pbs_header)", min_length=1, max_length=40)],
+    ctx: Context,
+    check_fs: Annotated[bool, Field(description="Check that inputs exist and QC output folders are clean before asking (use on the cluster)")] = True,
+    timeout_minutes: Annotated[int, Field(description="Stop the step after this many minutes", ge=1, le=120)] = 30,
+) -> dict:
+    """Ask the person to approve, then run one validated MIMA step inside the container on this machine.
+
+    Use for the generator steps (qc, taxa, func: they only write PBS scripts) and for the command-line stages
+    (qc-report, taxa-report, taxa-tables, vis-barplot, diversity, classifier). The command is built and checked by the
+    same code as mima_build_commands; you cannot pass a command of your own. Calling this does not run anything by itself:
+    the client shows the person the exact command and they must approve. Never say a step ran unless status is ran.
+    Statuses: ran (exit 0), failed (the step exited with an error: show the end of output), timeout, invalid (the plan failed
+    its checks: fix it), declined, cancelled, disabled (not switched on for this server), approval_unavailable (this client cannot
+    ask the person), tool_error (for example apptainer is not on PATH). After a generator step, validate the new scripts with
+    mima_validate_pbs_scripts. These steps run on the login node, so keep them short."""
+    out = {"script": "build_command", "ran": False}
+    if not _run_enabled():
+        out.update(status="disabled", note="Running steps is not enabled on this server (MIMA_ALLOW_RUN=1 is not set). "
+                   "Give the person the command from mima_build_commands to run themselves.")
+        return out
+    if not isinstance(step, dict) or not isinstance(step.get("module"), str):
+        raise ToolError("step: expected one step such as {\"module\": \"mima-qc\", \"params\": {...}}")
+    image = Path(check_path(image_path, "image_path"))
+    if image.suffix != ".sif" or not image.is_file():
+        raise ToolError(f"image_path must be an existing .sif file: {image_path}")
+    binds = [check_path(b, "bind_paths") for b in bind_paths]
+    for b in binds:
+        if not Path(b).is_dir() or "," in b or ":" in b:
+            raise ToolError(f"bind_paths: {b} must be an existing folder without ',' or ':' in its name")
+    if shutil.which("apptainer") is None:
+        out.update(status="tool_error", note="apptainer is not on PATH for this server. On Gadi run 'module load apptainer' before starting it.")
+        return out
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "plan.json"
+        f.write_text(json.dumps({"steps": [step]}))
+        built = await run_json_script("build_command", [str(f)] + (["--check-fs"] if check_fs else []))
+    steps = (built.get("data") or {}).get("steps") or []
+    if built["status"] != "ok" or len(steps) != 1 or not steps[0].get("command"):
+        built.update(ran=False, status="invalid" if built["status"] in ("invalid", "ok") else built["status"])
+        return built
+    command = steps[0]["command"]
+    shown = command.replace("\n", "\n  ")
+    message = (f"APPROVAL NEEDED. Run this MIMA step now ({steps[0].get('stage')}, on this machine, up to {timeout_minutes} minutes)?\n"
+               f"  image: {image}\n  folders: {', '.join(binds)}\n  command:\n  {shown}\n"
+               "Choose 'Run this step now' only if you have reviewed the command.")
+    verdict = await _ask_person(ctx, message, "Run this step now", "Do NOT run")
+    notes = {"unavailable": ("approval_unavailable", "This client cannot ask the person for approval, so nothing was run. Give the person the command from mima_build_commands to run themselves."),
+             "cancelled": ("cancelled", "The approval prompt was dismissed. Nothing was run."),
+             "declined": ("declined", "The person did not approve. Nothing was run.")}
+    if verdict != "approved":
+        out.update(status=notes[verdict][0], note=notes[verdict][1])
+        return out
+    res = await run_built_command(command, str(image), binds, timeout_minutes * 60)
+    res["ran"] = res["status"] in ("ran", "failed")
+    res["stage"] = steps[0].get("stage")
+    res["warnings"] = steps[0].get("warnings", [])
     res["approved_by"] = "person, through the client approval prompt"
     return res
 

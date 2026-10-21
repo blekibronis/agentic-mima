@@ -11,6 +11,7 @@ from .llm import LLMError, post, result_text, tool_specs
 
 SUBMISSION_TOOL = "mima_prepare_submission"
 SUBMIT_TOOL = "mima_submit_jobs"  # not in GATED: the person is asked by the server through the approval prompt
+RUN_TOOL = "mima_run_step"  # not in GATED either: the server asks the person
 WRITE_TOOL = "mima_write_prepared_inputs"
 HEADER_TOOL = "mima_write_pbs_header"
 GATED = (SUBMISSION_TOOL, WRITE_TOOL, HEADER_TOOL)  # each call needs a person's yes
@@ -71,7 +72,7 @@ class Agent:
         self.approve, self.say, self.api_key, self.temperature = approve, say, api_key, temperature
         self.max_steps, self.result_limit, self.timeout = max_steps, result_limit, timeout
         self.context_tokens, self.keep_reasoning = context_tokens, keep_reasoning
-        hide = () if enable_submission_tool else (SUBMISSION_TOOL, SUBMIT_TOOL)
+        hide = () if enable_submission_tool else (SUBMISSION_TOOL, SUBMIT_TOOL, RUN_TOOL)
         self.specs = tool_specs(tools, hide) + [read_tool_spec(self.skill_dir)]
         self.names = {s["function"]["name"] for s in self.specs}
         skill_md = (self.skill_dir / "SKILL.md").read_text()

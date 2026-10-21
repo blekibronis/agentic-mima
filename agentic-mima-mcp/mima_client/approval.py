@@ -43,9 +43,10 @@ def make_handler(ask=input, say=print, has_terminal=lambda: sys.stdin.isatty()):
         if not has_terminal():
             say("  [client] Submission needs a person at the keyboard and there is no terminal: declined.")
             return ElicitResult(action="decline")
-        answer = ask("  Type SUBMIT (capitals) to submit these jobs now. Anything else cancels: ").strip()
-        if answer == "SUBMIT":
-            say("  [client] Approved by you. Submitting.")
+        word = options[0].split()[0].upper()  # "Submit ..." -> SUBMIT, "Run ..." -> RUN
+        answer = ask("  Type %s (capitals) to go ahead. Anything else cancels: " % word).strip()
+        if answer == word:
+            say("  [client] Approved by you. Going ahead.")
             return options[0]
         say("  [client] Not approved. Nothing was submitted.")
         return ElicitResult(action="decline")
