@@ -10,7 +10,10 @@ import os
 import sys
 from pathlib import Path
 
+from .agent import READ_TOOL, read_skill_file
 from .llm import LLMError, get, post, result_text
+
+LOOKUPS = ("mima_list_modules", READ_TOOL)  # read-only; allowed before the build call
 
 
 def line(ok, text):
@@ -84,18 +87,40 @@ async def run(a):
                 results.append(line(bool(text.strip()) and not final.get("tool_calls"), "final answer after the result: %r" % text[:160]))
 
         print("3. A nested argument")
-        _, r = ask("Build the command for the mima-bracken-report module with input folder /scratch/mp96/demo/Taxonomy_profiling. Use the tool; do not write the command yourself.")
-        calls = r["choices"][0]["message"].get("tool_calls") or []
+        # The skill tells the model to check module names (mima_list_modules) and parameters (reference files, read with
+        # skill_read_file) before building, so looking them up first is correct. Let it do that (read-only, up to 4 rounds)
+        # and judge the first mima_build_commands call.
+        msgs, r = ask("Build the command for the mima-bracken-report module with input folder /scratch/mp96/demo/Taxonomy_profiling. Use the tool; do not write the command yourself.")
+        build, seen = None, []
+        for _ in range(4):
+            msg = r["choices"][0]["message"]
+            calls = msg.get("tool_calls") or []
+            seen += [c["function"]["name"] for c in calls]
+            build = next((c for c in calls if c["function"]["name"] == "mima_build_commands"), None)
+            if build or not calls or any(c["function"]["name"] not in LOOKUPS for c in calls):
+                break
+            msgs.append({k: v for k, v in msg.items() if v is not None and k not in ("reasoning_content", "reasoning")})
+            for c in calls:
+                if c["function"]["name"] == READ_TOOL:
+                    try:
+                        rel = json.loads(c["function"].get("arguments") or "{}").get("path", "")
+                    except (ValueError, AttributeError):
+                        rel = ""
+                    out = read_skill_file(skill, rel)[1]
+                else:
+                    out = result_text(await client.call_tool("mima_list_modules", {}, raise_on_error=False), 12000)
+                msgs.append({"role": "tool", "tool_call_id": c.get("id", "x"), "content": out})
+            r = post(url, {"model": a.model, "messages": msgs, "tools": agent.specs, "tool_choice": "auto"}, a.api_key, a.timeout)
         good = False
-        if calls and calls[0]["function"]["name"] == "mima_build_commands":
+        if build:
             try:
-                plan = json.loads(calls[0]["function"]["arguments"]).get("plan")
+                plan = json.loads(build["function"]["arguments"]).get("plan")
                 steps = plan.get("steps") if isinstance(plan, dict) and "steps" in plan else [plan]
                 good = isinstance(steps[0], dict) and steps[0].get("module") == "mima-bracken-report" and isinstance(steps[0].get("params"), dict)
             except (ValueError, AttributeError, IndexError, TypeError):
                 good = False
-        results.append(line(good, "mima_build_commands got a plan object with the module and its params" if good else
-                            "no well-formed plan: %s" % (json.dumps([c["function"] for c in calls])[:200] if calls else "no tool call")))
+        results.append(line(good, "mima_build_commands got a plan object with the module and its params (after: %s)" % (", ".join(seen) or "nothing") if good else
+                            "no well-formed plan; the model called: %s" % (", ".join(seen) or "no tool")))
 
     bad = [r for r in results if r is False]
     print("\nRESULT: %s" % ("READY" if not bad else "NOT READY (%d check(s) failed)" % len(bad)))
