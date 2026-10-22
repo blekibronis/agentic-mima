@@ -182,7 +182,7 @@ class TestBuilder(unittest.TestCase):
         self.assertNotIn("approved database", self.build(taxa)[1])
         vis = {"module": "mima-visualisation", "params": {"--feature-table": ["/v/a_relAbund"], "--metadata": "/v/m.tsv", "--study-groups": "lab", "--output-dir": "/v/o"}}
         rc, out = self.build(vis); self.assertEqual(rc, 0, out)
-        self.assertIn("alpha", out); self.assertIn("cause unconfirmed", out)
+        self.assertIn("alpha", out); self.assertIn("data frame", out)
 
     def test_stage_order_enforced(self):
         taxa = {"module": "mima-taxa-profiling", "params": {"-i": "/a", "-o": "/b", "--reference-path": "/c", "--mode": "container", "--pbs-config": "/p"}}
@@ -624,11 +624,12 @@ class TestLogs(unittest.TestCase):
         clean = write(self.tmp / "clean.log", "Processing sample S1\nDone\n")
         self.assertEqual(run("scan_logs.py", clean)[0], 0, "verified patterns must not match a clean log")
 
-    def test_alpha_diversity_error_is_not_presented_as_a_proven_container_bug(self):
-        """The error line was observed; the cause (alpha-diversity.R line 21) is the project owner's reading and unconfirmed."""
+    def test_alpha_diversity_cause_is_the_reproduced_one(self):
+        """22 Oct 2026: reproduced without MIMA data; taxhead was ruled out. The wording must not go back to blaming taxhead or the user's data."""
         p = {x["id"]: x for x in json.loads((SC / "error_patterns.json").read_text())["patterns"]}["calc-shannon-input"]
-        self.assertIn("unconfirmed", p["cause"]); self.assertNotIn("Container bug:", p["cause"])
-        self.assertIn("unconfirmed", (SKILL / "references/troubleshooting.md").read_text())
+        self.assertIn("data frame", p["cause"]); self.assertIn("not the cause", p["cause"]); self.assertNotIn("Container bug:", p["cause"])
+        t = (SKILL / "references/troubleshooting.md").read_text()
+        self.assertIn("not `taxhead`", t); self.assertNotIn("probably the `taxhead`", t)
         self.assertTrue((SKILL / "references/lab-defaults.md").is_file())
 
     def test_no_logs_found(self):

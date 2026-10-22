@@ -199,14 +199,14 @@
       "regex": "Input data must be a numeric vector or matrix",
       "severity": "error",
       "confidence": "high",
-      "cause": "mima-visualisation stopped in alpha diversity (calc_shannon) after beta diversity finished; both _relAbund and _counts tables fail. The error was observed in a real run. The cause is unconfirmed: the project owner's reading is that alpha-diversity.R line 21 passes siteInCol = TRUE and taxhead = \"taxonomy\" to otuSummary::alphaDiversity although the table has no taxonomy column, so the numeric matrix is read as character. The otuSummary documentation (taxhead names a taxonomy column if the table has one) fits this but does not prove it. It may also depend on the input or the container version.",
-      "fix": "Do not retry with the other table. Tell the user alpha diversity did not complete, and report only the outputs that exist. To confirm the cause, follow the checks in references/troubleshooting.md. The project owner's proposed change (a purely numeric matrix with siteInCol = FALSE and taxhead = NULL) ran cleanly for them but has not been tested by this skill. Beta diversity and differential abundance outputs from the same run can still be used if they exist.",
+      "cause": "mima-visualisation stopped in alpha diversity (calc_shannon) after beta diversity finished; both _relAbund and _counts tables fail. Reproduced without MIMA data in otuSummary 0.1.2 inside the container (22 Oct 2026): the container's call (siteInCol = TRUE) converts the table to a data frame, and calc_shannon accepts only numeric vectors or matrices (is.numeric is FALSE for a data frame). The taxhead argument is not the cause. It does not depend on the user's data. The fix belongs in the container.",
+      "fix": "Do not retry with the other table. Tell the user alpha diversity did not complete, and report only the outputs that exist. This is a container problem for the MIMA maintainers (see references/troubleshooting.md). A matrix with siteInCol = FALSE works on test data but has not been checked on real MIMA tables. Beta diversity and differential abundance outputs from the same run can still be used if they exist.",
       "verified": true,
       "evidence": {
-        "source": "Rafael (project owner), Gadi, container mima4_v2.0.0_20240409, 2026",
+        "source": "Rafael (project owner), Gadi login node, container mima4_v2.0.0_20240409, 22 Oct 2026",
         "observed_line": "  Input data must be a numeric vector or matrix.",
         "context": "Error in calc_shannon(data = x, base = exp(1)) :",
-        "note": "Reported by the project owner from a run on Gadi; the log itself was not seen by the skill's author."
+        "note": "Reproduced with a plain count matrix: matrix input works, the same numbers as a data frame fail; calc_shannon checks is.numeric(data). Terminal output pasted by the project owner."
       }
     },
     {
