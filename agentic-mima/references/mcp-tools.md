@@ -7,6 +7,8 @@ When your tool list contains tools named `mima_*`, the project's MCP server is c
 - Reading a tool result
 - What no tool does
 - Submission
+- Coming back to a run
+- Running a step
 - When a tool refuses or fails
 
 ## Which tool replaces which command
@@ -25,9 +27,10 @@ When your tool list contains tools named `mima_*`, the project's MCP server is c
 | 3 | `validate_pbs_config.py` | `mima_validate_pbs_config` | `module` is `qc`, `taxa` or `func` |
 | 2 | `estimate_read_length.py` | `mima_estimate_read_length` | `available` is a comma list such as `50,100,150` |
 | 6 | `validate_pbs_scripts.py` | `mima_validate_pbs_scripts` | `paths` is a list; `check_fs` replaces `--check-fs` |
-| 7 | `submit_jobs.py` (dry run) | `mima_prepare_submission` | dry run only; see Submission |
+| 7 | `submit_jobs.py` (dry run), `stage_report.py write-job` | `mima_prepare_submission` | dry run only; see Submission. Also give `stage`, `output_dir`, `manifest`, `choices`, `mail_to` and `expected_minutes` so the run ledger is useful later; the follow-up report job is added unless `stage_report` is false |
 | 7 | `submit_jobs.py --execute` | `mima_submit_jobs` | asks the person to approve, then submits; see Submission. Give the same `run_dir`, `token`, `check_fs`, `project` and `queue` as the dry run |
 | 8 | `check_job_status.py` | `mima_check_job_status` | give `job_ids` or `record_path`, not both |
+| 8 | `run_state.py resume` | `mima_resume` | give the run folder (`folder`). Read-only. Use it first when the person comes back to a run from an earlier session; see Coming back to a run |
 | 9 | `check_outputs.py` | `mima_check_outputs` | `stage`, `directory`, `manifest` |
 | 9 | `scan_logs.py` | `mima_scan_logs` | `max_hits` (default 3, up to 50): raise it when you need every affected sample, not just the first three |
 | 10 | `check_report.py` | `mima_check_report` | `stages`, `run_dir` |
@@ -43,10 +46,14 @@ Every result has: `status`, `exit_code`, `output` (the script's own text), `data
 | `ok`, `valid`, `complete`, `no_known_errors`, `dry_run_ok` | The script found no errors | Report any warnings in `output` or `data`. For `no_known_errors`, say it does not prove the run succeeded |
 | `invalid`, `errors`, `errors_found`, `failed` | The script found errors | Explain each error with its fix from `references/validation-rules.md` or `references/troubleshooting.md`; never edit files to make a check pass. If `mima_plan_pbs_header` returns `invalid`, the draft failed its own check: report it and do not use the draft |
 | `in_progress` | A job is queued, held or running | Estimate the time left and ask the user to come back |
+| `no_jobs` | `mima_resume` found a run folder with nothing submitted | Say so; nothing is running from there |
+| `choose_run` | `mima_resume` found several runs and lists them in `data.runs` | Ask the person which one; do not pick |
+| `not_found` | `mima_resume` found no run in or under that folder | Ask for the right folder |
 | `unresolved` | The scheduler no longer knows a job | Stop waiting: read the PBS log with `mima_scan_logs` and `mima_check_outputs`, and say the status came from logs and outputs |
 | `prepared` | Changes are needed and listed in `data.changes` (inputs), or a header draft is in `data.lines` | Explain each change in plain words and ask before `mima_write_prepared_inputs` or `mima_write_pbs_header`; afterwards use the files in `data.use` and validate them. A header draft's numbers are lab estimates: say so |
 | `unchanged` | The files already follow the conventions | Use them as they are and validate |
 | `needs_input` | Questions are open in `data.needs_input` | Put each to the user; do not guess; nothing is written until they are answered |
+| `written`, `bad_args` | The follow-up report job script was written, or the request for it was refused | Normally internal to `mima_prepare_submission`; if it fails, say so and offer to prepare without it (`stage_report` false) |
 | `bad_plan`, `unreadable`, `no_scripts`, `no_fastq`, `no_logs`, `usage_problem` | The input could not be used | Fix the input or ask the user; do not retry unchanged |
 | `tool_error`, `timeout`, `unexpected_exit` | The tool itself failed (for example `qstat` is missing on this machine) | Say so, give the user the equivalent shell command to run where it works, and do not guess a result |
 
@@ -76,6 +83,10 @@ Only `mima_run_step` runs a MIMA command (`apptainer run --app ...`), one valida
 | `disabled`, `approval_unavailable` | This server or this chat cannot ask the user, so nothing was submitted. Give them the `run_yourself` command from `mima_prepare_submission` to run in their own terminal, where they type the confirmation |
 
 Do not try to submit by any other route, and never ask the server to skip the user's prompt.
+
+## Coming back to a run
+
+A new session has no memory of the old one, and the jobs of a stage can outlive many chats. The run folder holds what is needed: `mima_run_state.json` (the run ledger), `submission_record.json` and, once the stage has ended, `STAGE_REPORT_BATCH.md`. Call `mima_resume` with the folder first. It reads the ledger, asks PBS for the live state of the last submitted stage, scans the logs and checks the outputs when the ledger names them, and returns `data.next` in plain words. Report what it shows; do not say jobs finished unless its status is `complete`. It is read-only and coming back is not approval: any next stage still goes through `mima_run_step` or `mima_submit_jobs`, and the person is asked again. The follow-up job that writes the stage report (`stage_report.py`) is queued with the stage by `mima_prepare_submission`; no tool runs it directly. `references/job-monitoring.md` has the full procedure.
 
 ## Running a step
 

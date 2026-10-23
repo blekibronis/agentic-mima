@@ -1446,5 +1446,223 @@ class TestHelpComparator(unittest.TestCase):
         self.assertIn("does not exist", r.stderr)
 
 
+class TestRunLedgerAndResume(unittest.TestCase):
+    """The run ledger, the follow-up stage-report job, and picking a run up again in a new session (run_state.py, stage_report.py)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp()); cls.cl = Cluster(cls.tmp / "cluster")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        self.cl.reset(); self.cl.jobs.write_text("{}")
+        self.work = Path(tempfile.mkdtemp(dir=self.tmp)); b = f"{self.work}:{self.work}"
+        extra = "#PBS -P mp96\n#PBS -l storage=gdata/mp96+scratch/mp96\n"
+        self.qc = [pbs_script(self.work / "QC_module" / f"qcModule_{i}.pbs", f"qc{i}", bind=b, header_extra=extra) for i in (0, 1)]
+        for i in (0, 1):
+            write(self.work / "QC_module" / f"S{i}.sh")
+        self.rec, self.plan = self.work / "submission_record.json", self.work / "plan.json"
+        self.ledger = self.work / "mima_run_state.json"
+
+    def make_plan(self, mail=None, report=True, **extra):
+        rc, out = run("stage_report.py", "write-job", "--run-dir", self.work, "--batch", "qc-1", "--like", self.qc[0])
+        self.assertEqual(rc, 0, out)
+        jobs = [{"id": f"qc{i}", "script": str(self.qc[i])} for i in (0, 1)]
+        if report:
+            jobs.append({"id": "report", "role": "report", "queue": "normal", "script": str(self.work / "stage_report_qc-1.pbs"),
+                         "after_any": ["qc0", "qc1"], "cwd": str(self.work)})
+        doc = {"batch": "qc-1", "stage": "qc", "choices": {"host": "GRCh38"}, "jobs": jobs}
+        if mail:
+            doc["mail_to"] = mail
+        doc.update(extra)
+        write(self.plan, json.dumps(doc))
+
+    def dry(self):
+        rc, out = run("submit_jobs.py", self.plan, "--record", self.rec, env=self.cl.env())
+        return rc, out, next((l.split()[-1] for l in out.splitlines() if l.startswith("Confirmation token")), None)
+
+    def submit(self, env=None):
+        rc, out, tok = self.dry(); self.assertEqual(rc, 0, out)
+        return run("submit_jobs.py", self.plan, "--execute", "--confirm", tok, "--approval", "harness", "--record", self.rec, env=env or self.cl.env())
+
+    def set_jobs(self, **states):
+        d = {}
+        for k, (state, code) in states.items():
+            d[k] = {"job_state": state, "Job_Name": "x", "queue": "normal"}
+            if code is not None:
+                d[k].update(Exit_status=code, resources_used={"walltime": "00:05:00", "mem": "18gb"}, Resource_List={"walltime": "01:00:00", "mem": "64gb"})
+        self.cl.jobs.write_text(json.dumps(d))
+
+    def resume(self, *extra, env=None):
+        rc, out = run("run_state.py", "resume", "--run-dir", self.work, "--format", "json", *extra, env=env or self.cl.env())
+        return rc, (json.loads(out) if rc == 0 else out)
+
+    # ---- the submit script writes the ledger
+    def test_dry_run_writes_neither_a_record_nor_a_ledger(self):
+        self.make_plan(); rc, out, tok = self.dry()
+        self.assertEqual(rc, 0, out); self.assertFalse(self.rec.exists()); self.assertFalse(self.ledger.exists()); self.assertEqual(self.cl.calls(), [])
+        self.assertIn("never submits another stage", out)
+
+    def test_submission_writes_the_ledger_and_the_right_qsub_arguments(self):
+        self.make_plan(mail="rafael@example.org"); rc, out = self.submit(); self.assertEqual(rc, 0, out)
+        calls = self.cl.calls(); self.assertEqual(len(calls), 3)
+        for c in calls[:2]:
+            self.assertIn("-M rafael@example.org -m a ", c); self.assertNotIn("depend", c)   # stage jobs: mail only if aborted
+        self.assertIn("-q normal", calls[2]); self.assertIn("-m ae", calls[2])             # the report job: its own queue, mail at its end
+        self.assertIn("-W depend=afterany:1001.pbssrv:1002.pbssrv", calls[2])             # starts after any ending of both stage jobs
+        led = json.loads(self.ledger.read_text()); st = led["stages"][0]
+        self.assertEqual((led["schema"], st["batch"], st["stage"], st["mail_to"]), (1, "qc-1", "qc", "rafael@example.org"))
+        self.assertEqual(st["choices"], {"host": "GRCh38"}); self.assertEqual(st["approval"], "harness")
+        self.assertEqual([(j["id"], j["role"], j["pbs_job_id"]) for j in st["jobs"]], [("qc0", "stage", "1001.pbssrv"), ("qc1", "stage", "1002.pbssrv"), ("report", "report", "1003.pbssrv")])
+        self.assertEqual([e["kind"] for e in led["events"]], ["approved", "submitted"])
+        rec = json.loads(self.rec.read_text()); self.assertEqual({j["batch"] for j in rec["jobs"]}, {"qc-1"})
+        self.assertEqual([f.name for f in self.work.glob(".*.tmp")], [], "no half-written temporary file may be left behind")
+
+    def test_without_mail_no_mail_options_are_passed(self):
+        self.make_plan(); self.assertEqual(self.submit()[0], 0)
+        self.assertFalse([c for c in self.cl.calls() if " -M " in c or " -m " in c])
+
+    def test_a_bad_email_or_role_or_dependency_blocks_everything(self):
+        for kw, msg in ((dict(mail="not an address"), "valid email"), (dict(mail="a@b.org; rm -rf x"), "valid email")):
+            self.make_plan(**kw); rc, out, tok = self.dry(); self.assertEqual(rc, 1, out); self.assertIn(msg, out)
+        self.make_plan(); doc = json.loads(self.plan.read_text()); doc["jobs"][2]["role"] = "boss"; doc["jobs"][2]["after_any"] = ["nope"]
+        write(self.plan, json.dumps(doc)); rc, out, tok = self.dry()
+        self.assertEqual(rc, 1); self.assertIn("role must be one of", out); self.assertIn("unknown job 'nope'", out); self.assertEqual(self.cl.calls(), [])
+
+    def test_changing_the_email_after_the_dry_run_makes_the_token_stale(self):
+        self.make_plan(mail="a@example.org"); rc, out, tok = self.dry()
+        self.make_plan(mail="b@example.org")
+        rc, out = run("submit_jobs.py", self.plan, "--execute", "--confirm", tok, "--approval", "harness", "--record", self.rec, env=self.cl.env())
+        self.assertEqual(rc, 1); self.assertIn("REFUSED", out); self.assertEqual(self.cl.calls(), []); self.assertFalse(self.ledger.exists())
+
+    def test_a_busy_ledger_refuses_before_anything_is_queued(self):
+        import fcntl
+        self.make_plan(); held = open(str(self.work / "mima_run_state.json.lock"), "a"); fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            rc, out = self.submit(env=dict(self.cl.env(), MIMA_LEDGER_WAIT="0.3"))
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN); held.close()
+        self.assertEqual(rc, 1); self.assertIn("another session", out); self.assertEqual(self.cl.calls(), [])
+
+    def test_a_damaged_ledger_is_never_overwritten(self):
+        self.make_plan(); write(self.ledger, "{not json"); rc, out = self.submit()
+        self.assertEqual(rc, 1); self.assertIn("not valid JSON", out); self.assertEqual(self.cl.calls(), []); self.assertEqual(self.ledger.read_text(), "{not json")
+
+    # ---- the follow-up job script
+    def test_the_report_job_script_is_valid_and_carries_the_project_and_storage_lines(self):
+        self.make_plan(); text = (self.work / "stage_report_qc-1.pbs").read_text()
+        for line in ("#PBS -P mp96", "#PBS -l storage=gdata/mp96+scratch/mp96", "#PBS -l ncpus=1", "#PBS -l walltime=0:10:00", "#PBS -j oe"):
+            self.assertIn(line, text)
+        self.assertNotIn("qsub", text); self.assertNotIn("IMAGE_DIR", text)
+        rc, out = run("validate_pbs_scripts.py", self.work / "stage_report_qc-1.pbs", "--check-fs"); self.assertEqual(rc, 0, out)
+        bad = write(self.work / "stage_report_x.pbs", text + "qsub next.pbs\n")
+        rc, out = run("validate_pbs_scripts.py", bad); self.assertEqual(rc, 1); self.assertIn("PBS command", out)
+
+    def test_write_job_refuses_odd_names_and_sizes(self):
+        for args in (("--batch", "a b"), ("--batch", "x;rm"), ("--batch", "ok", "--walltime", "10"), ("--batch", "ok", "--mem", "lots")):
+            rc, out = run("stage_report.py", "write-job", "--run-dir", self.work, *args); self.assertEqual(rc, 2, args)
+
+    # ---- the follow-up job's work
+    def test_stage_report_records_what_pbs_said_while_it_still_knew(self):
+        self.make_plan(); self.submit(); self.set_jobs(**{"1001.pbssrv": ("F", 0), "1002.pbssrv": ("F", 271), "1003.pbssrv": ("R", None)})
+        write(self.work / "QC_module" / "mima-qc.o1001", ">> ERROR: Input file /scratch/x/kraken2/S1.kraken2.report does not exist\n")
+        rc, out = run("stage_report.py", "run", "--run-dir", self.work, "--batch", "qc-1", env=self.cl.env())
+        self.assertEqual(rc, 0, out); self.assertIn("had a failure", out); self.assertIn("1 failed, 1 succeeded", out)
+        rep = json.loads((self.work / "STAGE_REPORT_qc-1.json").read_text())
+        self.assertEqual((rep["overall"], rep["counts"]), ("FAILED", {"FAILED": 1, "SUCCEEDED": 1}))
+        self.assertEqual([r["id"] for r in rep["rows"]], ["qc0", "qc1"], "the follow-up job must not report on itself")
+        self.assertTrue(rep["log_findings"]); self.assertTrue((self.work / "STAGE_REPORT_qc-1.md").is_file())
+        led = json.loads(self.ledger.read_text()); self.assertEqual(led["stages"][0]["report"]["overall"], "FAILED"); self.assertEqual(led["events"][-1]["kind"], "stage_report")
+
+    def test_stage_report_mail_is_sent_only_with_a_valid_address_and_a_mail_command(self):
+        fake = self.tmp / "mailbin"; fake.mkdir(exist_ok=True); sent = self.tmp / "mail.log"
+        if sent.exists(): sent.unlink()
+        m = fake / "mail"; m.write_text(f'#!/bin/sh\necho "$@" >> {sent}\ncat > /dev/null\n'); m.chmod(0o755)
+        self.make_plan(mail="rafael@example.org"); self.submit(); self.set_jobs(**{"1001.pbssrv": ("F", 0), "1002.pbssrv": ("F", 0)})
+        rc, out = run("stage_report.py", "run", "--run-dir", self.work, "--batch", "qc-1", env=dict(self.cl.env(), PATH=f"{fake}:" + self.cl.env()["PATH"]))
+        self.assertEqual(rc, 0, out); self.assertIn("-s MIMA stage qc: COMPLETE rafael@example.org", sent.read_text())
+        self.assertTrue(json.loads((self.work / "STAGE_REPORT_qc-1.json").read_text())["mail"]["sent"])
+        # no mail command on the node: the report is still written and says why no mail went
+        env = self.cl.env(); env["PATH"] = f"{self.cl.bin}:/nonexistent"
+        rc, out = run("stage_report.py", "run", "--run-dir", self.work, "--batch", "qc-1", env=env); self.assertEqual(rc, 0, out)
+        self.assertIn("no mail command", json.loads((self.work / "STAGE_REPORT_qc-1.json").read_text())["mail"]["note"])
+
+    def test_stage_report_works_from_the_record_when_the_ledger_is_gone(self):
+        self.make_plan(); self.submit(); self.ledger.unlink(); self.set_jobs(**{"1001.pbssrv": ("F", 0), "1002.pbssrv": ("F", 0)})
+        rc, out = run("stage_report.py", "run", "--run-dir", self.work, "--batch", "qc-1", env=self.cl.env()); self.assertEqual(rc, 0, out)
+        self.assertEqual(json.loads((self.work / "STAGE_REPORT_qc-1.json").read_text())["overall"], "COMPLETE")
+        rc, out = run("stage_report.py", "run", "--run-dir", self.work, "--batch", "other", env=self.cl.env()); self.assertEqual(rc, 1); self.assertIn("No jobs found", out)
+
+    # ---- resume
+    def test_resume_in_progress_says_to_wait_and_changes_nothing(self):
+        self.make_plan(); self.submit(); self.set_jobs(**{"1001.pbssrv": ("R", None), "1002.pbssrv": ("Q", None), "1003.pbssrv": ("Q", None)})
+        snap = sorted((str(f), f.stat().st_mtime_ns) for f in self.work.rglob("*") if f.is_file())
+        rc, d = self.resume(); self.assertEqual(rc, 0, d)
+        self.assertEqual((d["status"], d["stage"], d["choices"]), ("in_progress", "qc", {"host": "GRCh38"}))
+        self.assertIn("still queued or running", d["next"]); self.assertEqual(d["report_job"][0]["status"], "QUEUED")
+        self.assertEqual(snap, sorted((str(f), f.stat().st_mtime_ns) for f in self.work.rglob("*") if f.is_file()), "resume must not change any file")
+
+    def test_resume_complete_without_an_output_check_asks_for_one(self):
+        self.make_plan(); self.submit(); self.set_jobs(**{"1001.pbssrv": ("F", 0), "1002.pbssrv": ("F", 0)})
+        rc, d = self.resume(); self.assertEqual(d["status"], "complete"); self.assertIn("Check the stage's outputs", d["next"]); self.assertNotIn("outputs", d)
+
+    def test_resume_complete_with_an_output_check_reports_it(self):
+        R = self.work / "full"; build_run_tree(R)
+        for i in (0, 1):
+            pbs_script(R / "QC_module" / f"qcModule_{i}.pbs", f"qc{i}", bind=f"{R}:{R}")
+        plan = {"stage": "qc", "batch": "qc-2", "check": {"stage": "qc", "dir": str(R / "QC_module"), "manifest": str(R / "manifest.csv")},
+                "jobs": [{"id": f"qc{i}", "script": str(R / "QC_module" / f"qcModule_{i}.pbs")} for i in (0, 1)]}
+        write(R / "plan.json", json.dumps(plan))
+        rc, out = run("submit_jobs.py", R / "plan.json", "--record", R / "submission_record.json", env=self.cl.env())
+        tok = next(l.split()[-1] for l in out.splitlines() if l.startswith("Confirmation token"))
+        rc, out = run("submit_jobs.py", R / "plan.json", "--execute", "--confirm", tok, "--approval", "harness", "--record", R / "submission_record.json", env=self.cl.env()); self.assertEqual(rc, 0, out)
+        self.set_jobs(**{"1001.pbssrv": ("F", 0), "1002.pbssrv": ("F", 0)})
+        rc, out = run("run_state.py", "resume", "--run-dir", R, "--format", "json", env=self.cl.env()); d = json.loads(out)
+        self.assertEqual(d["status"], "complete"); self.assertTrue(d["outputs"]["ok"], d["outputs"]); self.assertIn("next stage can be planned", d["next"])
+
+    def test_resume_failed_shows_the_log_finding_and_forbids_an_identical_resubmission(self):
+        self.make_plan(); self.submit(); self.set_jobs(**{"1001.pbssrv": ("F", 0), "1002.pbssrv": ("F", 271)})
+        write(self.work / "QC_module" / "mima-qc.o1002", ">> ERROR: Input file /scratch/x/kraken2/S1.kraken2.report does not exist\n")
+        rc, d = self.resume(); self.assertEqual(d["status"], "failed"); self.assertTrue(d["log_findings"]); self.assertIn("identical script cannot be submitted again", d["next"])
+
+    def test_resume_uses_the_stage_report_when_pbs_has_forgotten_the_jobs(self):
+        self.make_plan(); self.submit(); self.set_jobs(**{"1001.pbssrv": ("F", 0), "1002.pbssrv": ("F", 0)})
+        run("stage_report.py", "run", "--run-dir", self.work, "--batch", "qc-1", env=self.cl.env())
+        self.cl.jobs.write_text("{}")      # PBS history is gone
+        rc, d = self.resume(); self.assertEqual(d["status"], "complete"); self.assertTrue(any("stage report written at" in n for n in d["notes"]))
+        # without a report the honest answer is "unresolved", never "probably finished"
+        led = json.loads(self.ledger.read_text()); led["stages"][0].pop("report"); write(self.ledger, json.dumps(led))
+        rc, d = self.resume(); self.assertEqual(d["status"], "unresolved"); self.assertIn("not from time passed", d["next"])
+
+    def test_a_stage_report_that_itself_could_not_tell_is_not_presented_as_an_answer(self):
+        self.make_plan(); self.submit()    # PBS already forgot the jobs when the follow-up job ran, so the report says UNRESOLVED
+        run("stage_report.py", "run", "--run-dir", self.work, "--batch", "qc-1", env=self.cl.env())
+        self.assertEqual(json.loads((self.work / "STAGE_REPORT_qc-1.json").read_text())["overall"], "UNRESOLVED")
+        rc, d = self.resume(); self.assertEqual(d["status"], "unresolved"); self.assertFalse(any("stage report written at" in n for n in d["notes"]))
+
+    def test_resume_without_a_ledger_uses_the_record_and_says_what_is_missing(self):
+        self.make_plan(); self.submit(); self.ledger.unlink(); self.set_jobs(**{"1001.pbssrv": ("F", 0), "1002.pbssrv": ("F", 0)})
+        rc, d = self.resume(); self.assertEqual(rc, 0, d); self.assertFalse(d["ledger_found"]); self.assertEqual(d["status"], "complete")
+        self.assertTrue(any("No ledger" in n for n in d["notes"]))
+
+    def test_resume_without_qstat_says_so_instead_of_guessing(self):
+        self.make_plan(); self.submit(); env = dict(os.environ, PATH="/nonexistent")
+        rc, d = self.resume(env=env); self.assertEqual(rc, 0, d); self.assertEqual(d["status"], "unresolved"); self.assertTrue(any("qstat is not available" in n for n in d["notes"]))
+
+    def test_resume_finds_runs_below_a_folder_and_asks_which_when_there_are_several(self):
+        root = Path(tempfile.mkdtemp(dir=self.tmp)); a, b = root / "run_a", root / "deep" / "run_b"
+        for r in (a, b):
+            write(r / "submission_record.json", json.dumps({"jobs": []}))
+        os.utime(str(a / "submission_record.json"), (1, 1))
+        rc, out = run("run_state.py", "resume", "--run-dir", root, "--format", "json"); d = json.loads(out)
+        self.assertEqual(d["status"], "choose_run"); self.assertEqual([r["run_dir"] for r in d["runs"]], [str(b), str(a)], "newest first")
+        rc, out = run("run_state.py", "resume", "--run-dir", self.tmp / "nothing_here", "--format", "json"); self.assertEqual(rc, 2)
+        write(b / "submission_record.json", json.dumps({"jobs": []}))
+        one = Path(tempfile.mkdtemp(dir=self.tmp)); write(one / "r" / "submission_record.json", json.dumps({"jobs": []}))
+        rc, out = run("run_state.py", "resume", "--run-dir", one, "--format", "json"); self.assertEqual(json.loads(out)["status"], "no_jobs", out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

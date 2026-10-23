@@ -23,7 +23,8 @@ checks arguments, runs one script, and returns its exit code, a status word and 
 | `mima_write_prepared_inputs` | prepare_inputs `--apply` | corrected copies of the manifest and metadata in a NEW folder (`out_dir`); originals untouched | prepared, unchanged, needs_input, unreadable |
 | `mima_plan_pbs_header` | make_pbs_header (preview) | nothing | prepared, needs_input, invalid |
 | `mima_write_pbs_header` | make_pbs_header `--apply` | a NEW PBS header file (`out_file`); never overwrites | prepared, needs_input, invalid |
-| `mima_prepare_submission` | submit_jobs **dry run** | writes `submission_plan.json` in `run_dir` | dry_run_ok, invalid, bad_plan |
+| `mima_prepare_submission` | submit_jobs **dry run**, and stage_report `write-job` | writes `submission_plan.json` in `run_dir`, and (unless `stage_report=false`) the small follow-up report job script `stage_report_BATCH.pbs` | dry_run_ok, invalid, bad_plan |
+| `mima_resume` | run_state `resume` | read-only: the run ledger, live `qstat`, a log scan and the output check | in_progress, complete, failed, unresolved, no_jobs, choose_run, not_found |
 | `mima_run_step` | build_command, then the command it prints | runs ONE validated MIMA step in the container **only after the person approves**; off unless `MIMA_ALLOW_RUN=1`; needs `apptainer` on PATH | ran, failed, timeout, invalid, declined, cancelled, disabled, approval_unavailable, tool_error |
 | `mima_submit_jobs` | submit_jobs `--execute` | queues the prepared jobs **only after the person approves in the client's prompt**; off unless `MIMA_ALLOW_SUBMIT=1` | submitted, partly_submitted, not_submitted, declined, cancelled, stale, invalid, too_many_jobs, disabled, approval_unavailable |
 
@@ -99,7 +100,13 @@ Without a terminal every one of these is denied. Every message, tool call and re
     python -m mima_client --base-url http://HOST:8000/v1 --model kimi-k3
     python -m mima_client --base-url ... --model ... --prompt-file turns.txt     # user turns separated by a line with ---
 
+To pick up a run in a new session (the jobs of a stage can outlive many chats), start the client with `--resume RUN_FOLDER` (or `--resume` alone to search the allowed folders). It calls the read-only `mima_resume` tool first, prints the live state to you and gives it to the model in front of your first message. Nothing is submitted or run by looking up a run, and coming back is not approval.
+
 Commands in the chat: `/reset`, `/quit`. Tested against a scripted endpoint only (`tests/test_agent.py`); not yet used with a real model.
+
+## Run ledger and the follow-up report job
+
+Each run folder gets `mima_run_state.json`, written by `submit_jobs.py` (never by the model): per submitted stage, the choices the person made, the jobs and PBS ids, the email address and where outputs should appear. `mima_prepare_submission` also adds a small follow-up job (1 CPU, 10 minutes, its own queue) that PBS starts after every job of the stage has ended, whatever the outcome (`-W depend=afterany`). It reads each job's final state from PBS while PBS still remembers it, scans the logs, checks the outputs when the ledger names them, writes `STAGE_REPORT_BATCH.json` and `.md`, updates the ledger and emails a one-line notice (PBS mail `-M` and `-m ae`; stage jobs mail only if aborted). It only reports: it never submits the next stage, which needs the person's approval in a session. `mima_resume` reads the ledger, asks PBS for the live state every time and treats the ledger as memory, not truth. Unverified on Gadi: email delivery, the dependency, and the report job's `python3` and mail command on a compute node (see the test plan in the project docs).
 
 ## Evaluation (mcp-builder Phase 4)
 

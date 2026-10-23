@@ -83,7 +83,7 @@ class AgentTest(unittest.TestCase):
         self.assertIn("=== SKILL.md ===", system)
         self.assertIn("name: agentic-mima", system)
         offered = {t["function"]["name"] for t in Scripted.seen[0]["tools"]}
-        self.assertEqual(len(offered), 19)  # 18 MCP tools + the reference reader
+        self.assertEqual(len(offered), 20)  # 19 MCP tools + the reference reader
         self.assertIn(READ_TOOL, offered)
         self.assertEqual([e["name"] for e in events if e["event"] == "tool"], [READ_TOOL, "mima_list_modules"])
         tool_msgs = [m for m in agent.messages if m["role"] == "tool"]
@@ -123,6 +123,32 @@ class AgentTest(unittest.TestCase):
         agent, final = run_agent(replies, "loop", max_steps=3)
         self.assertIn("Stopped after 3", final)
         self.assertIn("No such tool", agent.messages[-1]["content"])
+
+    def test_resume_gives_the_model_the_live_state_once_and_asks_nothing_of_the_person(self):
+        run = Path(tempfile.mkdtemp()); (run / "submission_record.json").write_text(json.dumps({"jobs": []}))
+        asked = []
+        Scripted.replies, Scripted.seen = [{"role": "assistant", "content": "Nothing is running."}, {"role": "assistant", "content": "ok"}], []
+        srv = HTTPServer(("127.0.0.1", 0), Scripted)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        async def go():
+            async with Client(mcp) as c:
+                agent = Agent(c, await c.list_tools(), SKILL, "http://127.0.0.1:%d/v1" % srv.server_port, "fake",
+                              lambda n, a: asked.append(n) or False, say=lambda s: None)
+                text = await agent.resume(str(run))
+                first = await agent.turn("Did my jobs finish?")
+                await agent.turn("thanks")
+                return text, first
+        try:
+            text, first = asyncio.run(go())
+        finally:
+            srv.shutdown(); srv.server_close()
+        self.assertIn("Status: no_jobs", text)
+        self.assertEqual(asked, [], "looking up a run is read-only and needs no yes")
+        sent = Scripted.seen[0]["messages"][-1]["content"]
+        self.assertTrue(sent.startswith("[From the program"), sent[:80]); self.assertIn("Nothing was submitted or run", sent); self.assertTrue(sent.endswith("Did my jobs finish?"))
+        self.assertEqual(Scripted.seen[1]["messages"][-1]["content"], "thanks", "the note goes in front of one message only")
+        self.assertIn("mima_resume", Scripted.seen[0]["messages"][0]["content"])
 
 
 if __name__ == "__main__":

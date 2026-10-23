@@ -56,7 +56,7 @@ class Base(unittest.TestCase):
         return asyncio.run(go())
 
     def prepare(self, jobs=None):
-        r = self.run_tool("mima_prepare_submission", {"jobs": jobs or self.jobs, "run_dir": str(self.tmp), "check_fs": False})
+        r = self.run_tool("mima_prepare_submission", {"jobs": jobs or self.jobs, "run_dir": str(self.tmp), "check_fs": False, "stage_report": False})
         self.assertEqual(r["status"], "dry_run_ok", r)
         return r["token"]
 
@@ -160,7 +160,7 @@ class TestApprovedSubmission(Base):
     def test_a_recorded_script_cannot_be_submitted_again(self):
         os.environ["MIMA_ALLOW_SUBMIT"] = "1"
         self.assertEqual(self.submit(self.prepare(), answering(SUBMIT))["status"], "submitted")
-        again = self.run_tool("mima_prepare_submission", {"jobs": self.jobs, "run_dir": str(self.tmp), "check_fs": False})
+        again = self.run_tool("mima_prepare_submission", {"jobs": self.jobs, "run_dir": str(self.tmp), "check_fs": False, "stage_report": False})
         self.assertEqual(again["status"], "invalid")
         r = self.submit("deadbeef0000", answering(SUBMIT))
         self.assertIn(r["status"], ("invalid", "stale"))
@@ -335,6 +335,86 @@ class TestPromptWord(unittest.TestCase):
         self.assertEqual(asyncio.run(h("x", None, self.Params(), None)), RUN)
         h = make_handler(ask=lambda p: "SUBMIT", say=said.append, has_terminal=lambda: True)
         self.assertEqual(asyncio.run(h("x", None, self.Params(), None)).action, "decline")
+
+
+class TestFollowUpAndResume(Base):
+    """The follow-up report job, the run ledger and mima_resume, through the server."""
+    def setUp(self):
+        super().setUp()
+        os.environ["MIMA_ALLOW_SUBMIT"] = "1"
+        qstat = Path(self.tmp / "bin" / "qstat")
+        qstat.write_text('#!/bin/sh\necho \'{"Jobs": {"4242.fake": {"job_state": "F", "Exit_status": 0, "Job_Name": "x"}}}\'\n')
+        qstat.chmod(0o755)
+
+    def prepare_with_report(self, **extra):
+        args = {"jobs": self.jobs, "run_dir": str(self.tmp), "check_fs": False, "stage": "taxa"}
+        args.update(extra)
+        return self.run_tool("mima_prepare_submission", args)
+
+    def test_the_follow_up_job_is_planned_but_nothing_is_submitted(self):
+        r = self.prepare_with_report(mail_to="rafael@example.org", choices={"threshold": "100"})
+        self.assertEqual(r["status"], "dry_run_ok", r)
+        self.assertFalse(r["submitted"]); self.assertIn("follow-up job", r["stage_report"])
+        plan = json.loads((self.tmp / "submission_plan.json").read_text())
+        self.assertEqual([j["id"] for j in plan["jobs"]], ["taxa", "stage_report"])
+        rep = plan["jobs"][1]
+        self.assertEqual((rep["role"], rep["after_any"], rep["queue"]), ("report", ["taxa"], "normal"))
+        self.assertEqual((plan["stage"], plan["mail_to"], plan["choices"]), ("taxa", "rafael@example.org", {"threshold": "100"}))
+        self.assertTrue(Path(rep["script"]).is_file()); self.assertFalse(self.record.exists()); self.assertFalse((self.tmp / "mima_run_state.json").exists())
+        self.assertIn("afterany", r["output"])
+
+    def test_the_person_is_shown_the_follow_up_job_and_the_address_and_approves_it_with_the_rest(self):
+        token = self.prepare_with_report(mail_to="rafael@example.org")["token"]
+        seen = []
+        r = self.submit(token, answering("Submit 2 job(s) now", seen))
+        self.assertEqual(r["status"], "submitted", r)
+        self.assertIn("follow-up report job", seen[0]); self.assertIn("rafael@example.org", seen[0]); self.assertIn("reports only", seen[0])
+        led = json.loads((self.tmp / "mima_run_state.json").read_text())
+        self.assertEqual([j["role"] for j in led["stages"][0]["jobs"]], ["stage", "report"]); self.assertEqual(led["stages"][0]["approval"], "harness")
+
+    def test_one_choice_covers_the_whole_plan_and_a_decline_queues_neither(self):
+        token = self.prepare_with_report()["token"]
+        r = self.submit(token, answering("Do NOT submit"))
+        self.assertEqual(r["status"], "declined"); self.assertFalse(self.record.exists()); self.assertFalse((self.tmp / "mima_run_state.json").exists())
+
+    def test_a_bad_address_or_an_output_dir_without_a_stage_is_refused(self):
+        for extra, text in (({"mail_to": "x; rm -rf /"}, "mail_to"), ({"stage": None, "output_dir": str(self.tmp)}, "needs stage")):
+            async def go():
+                async with Client(mcp) as c:
+                    try:
+                        args = {"jobs": self.jobs, "run_dir": str(self.tmp), "check_fs": False, "stage": "taxa"}; args.update(extra)
+                        args = {k: v for k, v in args.items() if v is not None}
+                        await c.call_tool("mima_prepare_submission", args); return None
+                    except Exception as exc:
+                        return str(exc)
+            self.assertIn(text, asyncio.run(go()))
+
+    def test_resume_reads_the_ledger_and_the_live_state_and_changes_nothing(self):
+        token = self.prepare_with_report(output_dir=str(self.tmp))["token"]
+        self.assertEqual(self.submit(token, answering("Submit 2 job(s) now"))["status"], "submitted")
+        before = sorted((str(f), f.stat().st_mtime_ns) for f in self.tmp.rglob("*") if f.is_file())
+        r = self.run_tool("mima_resume", {"folder": str(self.tmp)})
+        self.assertEqual(r["status"], "complete", r); self.assertEqual(r["data"]["stage"], "taxa"); self.assertIn("jobs", r["data"])
+        self.assertEqual(before, sorted((str(f), f.stat().st_mtime_ns) for f in self.tmp.rglob("*") if f.is_file()))
+
+    def test_resume_works_with_submission_switched_off_and_needs_no_prompt(self):
+        token = self.prepare_with_report()["token"]
+        self.submit(token, answering("Submit 2 job(s) now"))
+        os.environ.pop("MIMA_ALLOW_SUBMIT")
+        r = self.run_tool("mima_resume", {"folder": str(self.tmp)}, handler=None)
+        self.assertEqual(r["status"], "complete", r)
+
+    def test_resume_on_a_folder_with_no_run_says_not_found_and_respects_allowed_roots(self):
+        empty = self.tmp / "empty"; empty.mkdir()
+        self.assertEqual(self.run_tool("mima_resume", {"folder": str(empty)})["status"], "not_found")
+        os.environ["MIMA_ALLOWED_ROOTS"] = str(self.tmp / "only_here")
+        async def go():
+            async with Client(mcp) as c:
+                try:
+                    await c.call_tool("mima_resume", {"folder": str(empty)}); return None
+                except Exception as exc:
+                    return str(exc)
+        self.assertIn("outside the allowed folders", asyncio.run(go()))
 
 
 if __name__ == "__main__":

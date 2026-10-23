@@ -29,7 +29,7 @@ Follow these steps in order. None may be skipped, including for a single job.
    ]}
    ```
 
-3. **Dry run.** `python3 scripts/submit_jobs.py submission_plan.json`. This validates again, prints the exact `qsub` commands and a confirmation token, and submits nothing.
+3. **Dry run.** `python3 scripts/submit_jobs.py submission_plan.json`. This validates again, prints the exact `qsub` commands and a confirmation token, and submits nothing. With the MCP tool, `mima_prepare_submission` also writes the follow-up report job (`scripts/stage_report.py write-job`) and adds it to the plan with the dependency `afterany` on every stage job; ask the person once for an email address (optional) and pass it as `mail_to`. Optional plan fields (`stage`, `choices`, `check`, `mail_to`, `batch`, `expected_minutes`) are kept in the run ledger, `mima_run_state.json`. Show the follow-up job to the person as what it is: a small job that reports when the stage has ended and submits nothing.
 4. **Ask the user to approve.** Show, in plain language:
    - how many jobs, and what each stage does;
    - the resources each requests (`ncpus`, `mem`, `walltime` from the `#PBS` lines);
