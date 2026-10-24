@@ -42,6 +42,8 @@ UNSAFE = [
 
 def detect_module(path: Path):
     name, parent = path.name, path.parent.name
+    if name.startswith("stage_report"):
+        return "report"
     if name.startswith("qcModule_"):
         return "qc"
     if name == "run_taxa_profiling.pbs":
@@ -98,13 +100,17 @@ def validate_file(path, check_fs=False, module=None):
                 (errors if sev == "error" else warns).append(f"Line {n}: {msg}: {ln.strip()[:120]}")
 
     image = [m for m in (IMAGE_ASSIGN.match(ln) for _, ln in body) if m]
-    if not image:
+    if module == "report":
+        pass    # the stage-report job runs no container, so it has no IMAGE_DIR or bind paths
+    elif not image:
         errors.append("IMAGE_DIR is not set.")
     elif not image[0].group(1).strip().strip("\"'"):
         errors.append("IMAGE_DIR is empty.")
 
     bind_lines = [ln for _, ln in body if "APPTAINER_BIND" in ln and "export" in ln]
-    if not bind_lines:
+    if module == "report":
+        pass
+    elif not bind_lines:
         errors.append("APPTAINER_BIND is not exported; data outside the home directory will not be visible in the container.")
     else:
         m = re.search(r'APPTAINER_BIND=["\']?([^"\']*)', bind_lines[0])

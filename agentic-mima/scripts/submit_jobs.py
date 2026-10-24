@@ -34,6 +34,9 @@ Safety model (what each control does and does not do)
       harness  no typed confirmation. Use only when the tool that runs this command shows a
                person the exact command, including this flag and the token, and waits for
                their approval. The approval is then enforced by that tool, not by this script.
+  * Optional plan fields: "mail_to" (email for PBS notices), "batch", "stage", "choices", "check", "expected_minutes" are kept in
+    the run ledger (mima_run_state.json, next to the record). A job may have "after_any" (start when those jobs have ended
+    in any way), "queue" (its own queue) and "role": "report" (the stage-report job: it only reports, never submits).
   * qsub is called without a shell, with a fixed argument list. Nothing outside qsub runs.
   * A script already recorded as submitted is refused unless --allow-resubmit is given.
   * Deleting or altering jobs is never done here.
@@ -44,6 +47,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import shlex
 import shutil
@@ -53,11 +57,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import run_state  # noqa: E402
 from validate_pbs_scripts import validate_file  # noqa: E402
 
 JOB_ID = re.compile(r"^\d+(\[\])?(\.[A-Za-z0-9_.-]+)?$")
 ID_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 SAFE_OPT = re.compile(r"^[A-Za-z0-9_.@:-]{1,64}$")
+MAIL = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,120}\.[A-Za-z]{2,}$")
+BATCH = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+ROLES = ("stage", "report")
 
 
 def load_record(path):
@@ -97,13 +105,17 @@ def prepare(plan, record, check_fs):
         j["cwd"] = j.get("cwd") or str(p.parent)
         if not Path(j["cwd"]).is_dir():
             errors.append(f"{jid}: working directory not found: {j['cwd']}")
-        for dep in j.get("after", []):
+        for dep in list(j.get("after", [])) + list(j.get("after_any", [])):
             if dep not in known_plan and dep not in known_record:
-                errors.append(f"{jid}: 'after' refers to unknown job '{dep}'.")
+                errors.append(f"{jid}: 'after'/'after_any' refers to unknown job '{dep}'.")
+        if j.get("role", "stage") not in ROLES:
+            errors.append(f"{jid}: role must be one of {', '.join(ROLES)}.")
+        if j.get("queue") is not None and not SAFE_OPT.match(str(j["queue"])):
+            errors.append(f"{jid}: queue {j['queue']!r} has unsupported characters.")
         for ext in j.get("after_job_ids", []):
             if not JOB_ID.match(str(ext)):
                 errors.append(f"{jid}: '{ext}' is not a PBS job id.")
-        res = validate_file(p, check_fs)
+        res = validate_file(p, check_fs, module="report" if j.get("role") == "report" else None)
         results[jid] = res
         j["sha256"] = res["sha256"]
         errors += [f"{jid}: {e}" for e in res["errors"]]
@@ -119,7 +131,7 @@ def prepare(plan, record, check_fs):
             errors.append(f"Dependency cycle involving '{n}'.")
             return
         temp.add(n)
-        for d in by_id[n].get("after", []):
+        for d in list(by_id[n].get("after", [])) + list(by_id[n].get("after_any", [])):
             visit(d)
         temp.discard(n)
         done.add(n)
@@ -136,24 +148,77 @@ def run_command(args, token):
     for k in ("project", "queue", "account"):
         if getattr(args, k):
             parts += [f"--{k}", getattr(args, k)]
+    if args.mail_to:
+        parts += ["--mail-to", args.mail_to]
     return " ".join(shlex.quote(x) for x in parts)
 
 
 def make_token(order, opts):
-    payload = [{k: j.get(k) for k in ("id", "script", "sha256", "cwd", "after", "after_job_ids")} for j in order]
+    payload = [{k: j.get(k) for k in ("id", "script", "sha256", "cwd", "after", "after_any", "after_job_ids", "role", "queue")} for j in order]
     blob = json.dumps({"jobs": payload, "opts": opts}, sort_keys=True).encode()
     return hashlib.sha256(blob).hexdigest()[:12]
 
 
 def qsub_args(job, opts, pbs_ids):
     args = []
-    for flag, key in (("-P", "project"), ("-q", "queue"), ("-A", "account")):
-        if opts.get(key):
-            args += [flag, opts[key]]
-    deps = [pbs_ids.get(d, f"<{d}>") for d in job.get("after", [])] + list(job.get("after_job_ids", []))
+    queue = job.get("queue") or opts.get("queue")   # a job's own queue wins (the stage-report job must not go to hugemem)
+    for flag, value in (("-P", opts.get("project")), ("-q", queue), ("-A", opts.get("account"))):
+        if value:
+            args += [flag, value]
+    if opts.get("mail_to"):
+        # Stage jobs mail only if PBS aborts them (a quiet queue for 100 samples); the report job mails when it ends.
+        args += ["-M", opts["mail_to"], "-m", "ae" if job.get("role") == "report" else "a"]
+    ok = [pbs_ids.get(d, f"<{d}>") for d in job.get("after", [])] + list(job.get("after_job_ids", []))
+    anyend = [pbs_ids.get(d, f"<{d}>") for d in job.get("after_any", [])]
+    deps = []
+    if ok:
+        deps.append("afterok:" + ":".join(ok))
+    if anyend:
+        deps.append("afterany:" + ":".join(anyend))
     if deps:
-        args += ["-W", "depend=afterok:" + ":".join(deps)]
+        args += ["-W", "depend=" + ",".join(deps)]
     return args + [job["script"]]
+
+
+def plan_meta(plan, args):
+    """Optional plan-level facts kept in the run ledger. Returns (meta, errors)."""
+    errors, meta = [], {}
+    mail = args.mail_to or plan.get("mail_to")
+    if mail:
+        if not MAIL.match(str(mail)):
+            errors.append(f"mail_to {mail!r} is not a valid email address.")
+        else:
+            meta["mail_to"] = str(mail)
+    batch = plan.get("batch")
+    if batch is not None:
+        if not isinstance(batch, str) or not BATCH.match(batch):
+            errors.append("batch must use letters, digits and _ . - only (max 64).")
+        else:
+            meta["batch"] = batch
+    if plan.get("stage") is not None:
+        if isinstance(plan["stage"], str) and BATCH.match(plan["stage"]):
+            meta["stage"] = plan["stage"]
+        else:
+            errors.append("stage must use letters, digits and _ . - only (max 64).")
+    ch = plan.get("choices")
+    if ch is not None:
+        if not isinstance(ch, dict) or len(ch) > 20 or not all(isinstance(k, str) and isinstance(v, (str, int, float)) and len(str(v)) <= 200 and len(k) <= 64 for k, v in ch.items()):
+            errors.append("choices must be a small map of short text values (at most 20).")
+        else:
+            meta["choices"] = {k: str(v) for k, v in ch.items()}
+    chk = plan.get("check")
+    if chk is not None:
+        if (isinstance(chk, dict) and isinstance(chk.get("stage"), str) and isinstance(chk.get("dir"), str) and chk["dir"].startswith("/")
+                and (chk.get("manifest") is None or (isinstance(chk["manifest"], str) and chk["manifest"].startswith("/")))):
+            meta["check"] = {"stage": chk["stage"], "dir": chk["dir"], "manifest": chk.get("manifest")}
+        else:
+            errors.append("check must be {\"stage\": ..., \"dir\": \"/abs/path\", \"manifest\": \"/abs/path\" (optional)}.")
+    if plan.get("expected_minutes") is not None:
+        if isinstance(plan["expected_minutes"], int) and 0 < plan["expected_minutes"] < 100000:
+            meta["expected_minutes"] = plan["expected_minutes"]
+        else:
+            errors.append("expected_minutes must be a positive whole number.")
+    return meta, errors
 
 
 def main():
@@ -170,6 +235,7 @@ def main():
     ap.add_argument("--queue", help="qsub -q value")
     ap.add_argument("--account", help="qsub -A value")
     ap.add_argument("--qsub", default="qsub", help="qsub executable name")
+    ap.add_argument("--mail-to", help="email address for PBS notices (the plan's mail_to is used when this is not given)")
     args = ap.parse_args()
 
     opts = {k: getattr(args, k) for k in ("project", "queue", "account") if getattr(args, k)}
@@ -185,7 +251,11 @@ def main():
 
     rec_path = Path(args.record)
     record = load_record(rec_path)
+    meta, meta_errors = plan_meta(plan, args)
+    if meta.get("mail_to"):
+        opts["mail_to"] = meta["mail_to"]
     order, errors, warns, _ = prepare(plan, record, check_fs=not args.no_fs_check)
+    errors = meta_errors + errors
     token = make_token(order, opts) if order else None
 
     submitted_hashes = {j.get("sha256") for j in record.get("jobs", []) if j.get("pbs_job_id")}
@@ -208,6 +278,11 @@ def main():
     for j in order:
         print(f"  [{j['id']}] cd {j['cwd']} && {args.qsub} " + " ".join(qsub_args(j, opts, ids)))
         ids[j["id"]] = f"<{j['id']}>"
+    if meta.get("mail_to"):
+        print(f"\nEmail notices go to {meta['mail_to']}: PBS mails if a stage job is aborted"
+              + ("; the stage-report job mails when it ends (after every stage job has ended, whatever the outcome)." if any(j.get("role") == "report" for j in order) else "."))
+    if any(j.get("role") == "report" for j in order):
+        print("The stage-report job only reports. It never submits another stage; the next stage needs a person's approval in a session.")
 
     if not args.execute:
         print(f"\nDRY RUN ONLY. Nothing was submitted.\nConfirmation token: {token}")
@@ -233,12 +308,35 @@ def main():
             print("Cancelled. Nothing was submitted.")
             return 1
 
+    run_dir = rec_path.resolve().parent
+    try:
+        ledger = run_state.load(run_dir) or run_state.new_ledger(run_dir)
+    except ValueError as exc:
+        print(f"\nREFUSED: {exc}. Nothing was submitted.")
+        return 1
+    try:
+        with run_state.lock(run_dir, wait=float(os.environ.get("MIMA_LEDGER_WAIT", "10"))):
+            return execute(args, order, token, opts, meta, record, rec_path, run_dir, ledger)
+    except run_state.LedgerBusy as exc:
+        print(f"\nREFUSED: {exc}. Another session may be submitting here. Nothing was submitted.")
+        return 1
+
+
+def execute(args, order, token, opts, meta, record, rec_path, run_dir, ledger):
+    """Queue the jobs one by one, writing the record and the run ledger after each, so a cut-off loses nothing."""
     pbs_ids = {j["id"]: j["pbs_job_id"] for j in record.get("jobs", []) if j.get("pbs_job_id")}
     now = lambda: dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")  # noqa: E731
+    batch = meta.get("batch") or token
     record.setdefault("host", socket.gethostname())
     record.setdefault("jobs", [])
     record.setdefault("approvals", []).append({"mode": args.approval, "at": now(), "plan_token": token, "jobs": [j["id"] for j in order]})
     rec_path.write_text(json.dumps(record, indent=2))
+    entry = {"batch": batch, "stage": meta.get("stage"), "token": token, "submitted_at": now(), "approval": args.approval,
+             "choices": meta.get("choices") or {}, "check": meta.get("check"), "expected_minutes": meta.get("expected_minutes"),
+             "mail_to": meta.get("mail_to"), "jobs": []}
+    ledger.setdefault("stages", []).append(entry)
+    run_state.add_event(ledger, "approved", f"{len(order)} job(s) approved ({args.approval}); batch {batch}")
+    run_state.save(run_dir, ledger)
     failed = False
     for j in order:
         cmd = [args.qsub] + qsub_args(j, opts, pbs_ids)
@@ -254,15 +352,23 @@ def main():
             failed = True
             break
         pbs_ids[j["id"]] = out
-        record["jobs"].append({"id": j["id"], "script": j["script"], "sha256": j["sha256"], "cwd": j["cwd"],
-                               "after": j.get("after", []), "pbs_job_id": out, "submitted_at": now(), "plan_token": token})
+        role = j.get("role", "stage")
+        record["jobs"].append({"id": j["id"], "script": j["script"], "sha256": j["sha256"], "cwd": j["cwd"], "role": role, "batch": batch,
+                               "after": j.get("after", []), "after_any": j.get("after_any", []), "pbs_job_id": out, "submitted_at": now(), "plan_token": token})
         print(f"[{j['id']}] submitted as {out}")
         rec_path.write_text(json.dumps(record, indent=2))
+        entry["jobs"].append({"id": j["id"], "pbs_job_id": out, "script": j["script"], "cwd": j["cwd"], "role": role, "submitted_at": now(),
+                              "after": j.get("after", []), "after_any": j.get("after_any", [])})
+        run_state.save(run_dir, ledger)
 
     if failed:
+        run_state.add_event(ledger, "submit_failed", "submission stopped part-way; jobs already queued stay in the queue")
+        run_state.save(run_dir, ledger)
         print(f"\nSubmission stopped. Jobs already submitted stay in the queue and are listed in {rec_path}. Dependents of the failed job were not submitted.")
         return 1
-    print(f"\nAll {len(order)} job(s) submitted. Record written to {rec_path}")
+    run_state.add_event(ledger, "submitted", f"{len(order)} job(s) queued")
+    run_state.save(run_dir, ledger)
+    print(f"\nAll {len(order)} job(s) submitted. Record written to {rec_path}; run ledger {run_state.ledger_path(run_dir)}")
     return 0
 
 

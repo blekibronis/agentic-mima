@@ -62,7 +62,7 @@ class RunnerTest(unittest.TestCase):
         self.assertTrue(res["results"][0]["correct"])  # "`9`." counts as 9
         self.assertEqual(res["results"][0]["tools_used"], ["mima_list_modules"])
         offered = {t["function"]["name"] for t in Fake.seen[0]["tools"]}
-        self.assertEqual(len(offered), 13)
+        self.assertEqual(len(offered), 14)
         self.assertNotIn("mima_write_prepared_inputs", offered)
         self.assertNotIn("mima_write_pbs_header", offered)
         self.assertNotIn("mima_prepare_submission", offered)

@@ -1,4 +1,4 @@
-"""python -m mima_client --base-url http://HOST:8000/v1 --model kimi-k3   (run where the skill and your data are)"""
+"""python -m mima_client --base-url http://HOST:8000/v1 --model kimi-k3 [--resume [RUN_FOLDER]]   (run where the skill and your data are)"""
 import argparse
 import asyncio
 import os
@@ -35,6 +35,9 @@ async def main(a):
                       timeout=a.timeout, transcript=transcript, keep_reasoning=a.keep_reasoning,
                       enable_submission_tool=not a.no_submission_tool)
         print("agentic-mima client: %d tools offered; transcript: %s" % (len(agent.specs), transcript))
+        if a.resume is not None:
+            print("\n[client] Looking up your earlier run (read-only; nothing is submitted or run)...")
+            print(await agent.resume(a.resume))
         if a.prompt_file:
             for turn in [t.strip() for t in Path(a.prompt_file).read_text().split("\n---\n") if t.strip()]:
                 print("\nyou> " + turn)
@@ -68,5 +71,7 @@ if __name__ == "__main__":
     ap.add_argument("--context-tokens", type=int, default=65536)
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--keep-reasoning", action="store_true", help="send the model's reasoning back each turn (uses context)")
+    ap.add_argument("--resume", nargs="?", const="", default=None, metavar="RUN_FOLDER",
+                    help="start by reading an earlier run: its live PBS state, logs and outputs. Give the run folder, or nothing to search the allowed folders")
     ap.add_argument("--no-submission-tool", action="store_true", help="do not offer mima_prepare_submission at all")
     asyncio.run(main(ap.parse_args()))

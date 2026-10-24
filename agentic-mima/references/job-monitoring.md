@@ -9,6 +9,7 @@ Read this after jobs have been submitted, or when the user asks how their run is
 - How often to check
 - Gates: what must be true before the next stage
 - When the server has forgotten a job
+- Coming back in a new session
 
 ## Checking status
 
@@ -63,3 +64,26 @@ After any job reaches SUCCEEDED, run the matching `check_outputs.py --stage ...`
 ## When the server has forgotten a job
 
 Servers that do not keep job history report finished jobs as unknown. Then rely on the evidence on disk: the PBS log (`JOBNAME.oJOBID` in the submission directory), `scan_logs.py` and `check_outputs.py`. Say plainly in the report that status came from logs and outputs rather than from the scheduler. `check_job_status.py` reports this case as `UNRESOLVED` (exit code 4), not as in progress: waiting longer will not change it, so go to the logs now.
+
+## Coming back in a new session
+
+A stage can run for hours or days, longer than a chat. The jobs do not need the chat: they run in the queue on their own. What a new session needs is on disk in the run folder, so nothing depends on your memory of an earlier conversation.
+
+**What the program leaves behind**
+
+| File in the run folder | What it holds | Written by |
+|---|---|---|
+| `mima_run_state.json` (the run ledger) | per stage: the stage name, the person's choices, the jobs and PBS ids, the email address, where outputs should appear, and the stage report once it exists | `submit_jobs.py` and `stage_report.py`, never the model |
+| `submission_record.json` | the jobs submitted and each approval (mode, time, token) | `submit_jobs.py` |
+| `STAGE_REPORT_BATCH.json` and `.md` | what PBS said about every job of the stage when the last one ended, the log scan and the output check | the follow-up job |
+
+The follow-up job (`scripts/stage_report.py`, 1 CPU, 10 minutes) is queued with the stage and starts only after every job of the stage has ended, whatever the outcome (finished, failed, killed at the walltime limit or deleted). It runs the same read-only checks as Step 8 and 9, writes the report, and emails a one-line notice if an address was given at submission. It reads and reports only. It never submits the next stage: that needs the person's approval in a session.
+
+**What to do**
+
+1. Call `mima_resume` with the run folder (shell: `python3 scripts/run_state.py resume --run-dir DIR`). If you do not have the folder, ask for it; if the folder holds no run, the tool lists runs below it, newest first, and you ask which one.
+2. Read `status`: `in_progress` (tell them how it stands and to come back later; do not plan the next stage), `complete` (go to Step 9: check outputs, then the gates below), `failed` (explain with `references/troubleshooting.md`; an identical script cannot be submitted again unless they ask for a rerun), `unresolved` (PBS no longer knows a job and no stage report recorded it: decide from the logs and outputs, not from time passed), `no_jobs` (nothing was submitted from that folder).
+3. If `notes` says the outcome came from the stage report, say so: PBS keeps finished jobs only for a short time, and the report was written while it still remembered them.
+4. A folder from before ledgers existed has only `submission_record.json`. Resume still works from it, but the stage and the person's choices are unknown: ask.
+
+Resume is read-only. It does not submit, run or change anything, and coming back is not approval: every `RUN` and `SUBMIT` is asked again. The ledger can be out of date, so PBS is asked every time.

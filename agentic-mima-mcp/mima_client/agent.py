@@ -15,6 +15,7 @@ RUN_TOOL = "mima_run_step"  # not in GATED either: the server asks the person
 WRITE_TOOL = "mima_write_prepared_inputs"
 HEADER_TOOL = "mima_write_pbs_header"
 GATED = (SUBMISSION_TOOL, WRITE_TOOL, HEADER_TOOL)  # each call needs a person's yes
+RESUME_TOOL = "mima_resume"
 READ_TOOL = "skill_read_file"
 READABLE_DIRS = ("references", "assets")
 READ_LIMIT = 40000
@@ -29,6 +30,8 @@ PREFACE = (
     "You cannot approve a submission yourself. Call mima_submit_jobs only after the person has reviewed the prepared plan and asked you to submit; "
     "the program then asks them to approve, and nothing is submitted unless they do. Never say a job was submitted unless the result status is submitted. "
     "If a step needs something you do not have, say so instead of guessing.\n"
+    "You remember nothing of earlier sessions. When the person is returning to a run, a note from the program with its live state "
+    "comes before their message; use it, and call mima_resume yourself if they mean a different run. Coming back is never approval to submit or run anything.\n"
     "The skill follows. Follow it exactly.\n\n=== SKILL.md ===\n"
 )
 
@@ -79,6 +82,7 @@ class Agent:
         self.messages = [{"role": "system", "content": PREFACE + skill_md}]
         self.transcript = Path(transcript) if transcript else None
         self.used = 0  # tokens the server reported for the conversation after its last reply
+        self._note = ""  # live state of a run the person is returning to; goes in front of their next message
         self._log({"event": "start", "model": model, "tools": sorted(self.names), "skill_chars": len(skill_md)})
 
     def _log(self, rec):
@@ -94,6 +98,17 @@ class Agent:
     def reset(self):
         self.messages = self.messages[:1]
         self.used = 0
+        self._note = ""
+
+    async def resume(self, folder=""):
+        """Read an earlier run (mima_resume) and keep the result for the model's next message. Returns plain text for the person.
+
+        Nothing is submitted or run here: the tool is read-only, and the note tells the model that coming back is not approval."""
+        out = await self._call(RESUME_TOOL, {"folder": folder} if folder else {})
+        self._log({"event": "resume", "folder": folder, "result": out})
+        self._note = ("[From the program, not from the person: they are returning to an earlier run. This is its state read just now "
+                      "from the run folder and from PBS. The ledger is memory; PBS is the truth. Nothing was submitted or run.]\n" + out)
+        return resume_summary(out)
 
     async def _call(self, name, args):
         if name == READ_TOOL:
@@ -109,6 +124,8 @@ class Agent:
 
     async def turn(self, user_text):
         """One user message -> the model's final reply (after any number of tool calls)."""
+        if self._note:
+            user_text, self._note = self._note + "\n\n" + user_text, ""
         self.messages.append({"role": "user", "content": user_text})
         self._log({"event": "user", "content": user_text})
         warned = False
@@ -150,6 +167,34 @@ class Agent:
                 self._log({"event": "tool", "name": name, "args": args, "result": out})
                 self.messages.append({"role": "tool", "tool_call_id": c.get("id", name), "content": out})
         return "[client] Stopped after %d tool steps without a final reply." % self.max_steps
+
+
+def resume_summary(out):
+    """A few plain lines from a mima_resume result, for the person at the start of a resumed session."""
+    try:
+        d = json.loads(out)
+    except ValueError:
+        return out[:500]
+    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+    lines = []
+    if data.get("run_dir"):
+        lines.append("Run folder: %s" % data["run_dir"])
+    if data.get("stage"):
+        lines.append("Stage: %s   submitted: %s" % (data["stage"], data.get("submitted_at") or "unknown"))
+    lines.append("Status: %s" % (d.get("status") or data.get("status") or "unknown"))
+    for r in data.get("jobs", [])[:12]:
+        lines.append("  %s  %s  %s" % (r.get("id"), r.get("pbs_job_id"), r.get("status")))
+    if len(data.get("jobs", [])) > 12:
+        lines.append("  ... and %d more" % (len(data["jobs"]) - 12))
+    for run in data.get("runs", [])[:10]:
+        lines.append("  found: %s" % run.get("run_dir"))
+    for n in data.get("notes", []):
+        lines.append("Note: %s" % n)
+    if data.get("next"):
+        lines.append("Next: %s" % data["next"])
+    if not data and (d.get("stderr") or "").strip():
+        lines.append(d["stderr"].strip()[:300])
+    return "\n".join(lines)
 
 
 def _headline(text):

@@ -24,7 +24,7 @@ from mima_mcp import runner  # noqa: E402
 from mima_mcp.server import mcp  # noqa: E402
 
 EXPECTED_TOOLS = {"mima_list_modules", "mima_build_commands", "mima_validate_manifest", "mima_validate_metadata", "mima_validate_pbs_config",
-                  "mima_validate_pbs_scripts", "mima_estimate_read_length", "mima_check_outputs", "mima_check_job_status", "mima_scan_logs",
+                  "mima_validate_pbs_scripts", "mima_estimate_read_length", "mima_check_outputs", "mima_check_job_status", "mima_resume", "mima_scan_logs",
                   "mima_check_report", "mima_prepare_submission", "mima_prepare_inputs", "mima_write_prepared_inputs",
                   "mima_plan_pbs_header", "mima_write_pbs_header", "mima_submit_jobs", "mima_run_step"}
 BRACKEN = ">> ERROR: Input file /scratch/x/kraken2/S1.kraken2.report does not exist"

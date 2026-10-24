@@ -1,14 +1,14 @@
 <evaluation>
   <qa_pair>
-    <question>Two manifests for the next QC run are in /tmp/mima_eval/manifests. Only one of them is safe to pass to the pipeline as it is. Give the file name of the safe one, nothing else.</question>
+    <question>Two manifests for the next QC run are /tmp/mima_eval/manifests/manifest_run1.csv and /tmp/mima_eval/manifests/manifest_run2.csv. Only one of them is safe to pass to the pipeline as it is. Give the file name of the safe one, nothing else.</question>
     <answer>manifest_run1.csv</answer>
   </qa_pair>
   <qa_pair>
-    <question>The study metadata /tmp/mima_eval/study/metadata.tsv is going to be analysed with the species relative-abundance feature table in /tmp/mima_eval/study/featureTables, grouping by the column 'lab'. How many metadata samples have no column in that feature table? Answer with a number.</question>
+    <question>The study metadata /tmp/mima_eval/study/metadata.tsv is going to be analysed with the species relative-abundance feature table /tmp/mima_eval/study/featureTables/bracken_FT_species_relAbund, grouping by the column 'lab'. How many metadata samples have no column in that feature table? Answer with a number.</question>
     <answer>2</answer>
   </qa_pair>
   <qa_pair>
-    <question>Using the same metadata and species relative-abundance table as above (grouping by 'lab'), which missing sample ID comes first alphabetically? Answer with the ID only.</question>
+    <question>For the study metadata /tmp/mima_eval/study/metadata.tsv and the species relative-abundance feature table /tmp/mima_eval/study/featureTables/bracken_FT_species_relAbund, grouping by the column 'lab', which metadata sample ID that has no column in the feature table comes first alphabetically? Answer with the ID only.</question>
     <answer>M04</answer>
   </qa_pair>
   <qa_pair>
@@ -16,7 +16,7 @@
     <answer>150</answer>
   </qa_pair>
   <qa_pair>
-    <question>The QC log /tmp/mima_eval/logs/mima-QC.o900001 reports a damaged input file for one sample. Does the QC_module folder /tmp/mima_eval/run/QC_module contain any output at all (clean reads, scripts, logs or reports) for that sample? Answer Yes or No.</question>
+    <question>The QC log /tmp/mima_eval/logs/mima-QC.o900001 reports a damaged input file for one sample. The samples that should have been through QC are listed in /tmp/mima_eval/manifests/manifest_run1.csv. Does the QC_module folder /tmp/mima_eval/run/QC_module contain any output at all (clean reads, scripts, logs or reports) for that sample? Answer Yes or No.</question>
     <answer>No</answer>
   </qa_pair>
   <qa_pair>

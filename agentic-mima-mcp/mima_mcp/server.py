@@ -20,6 +20,7 @@ import shlex
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Annotated, List, Literal, Optional
 
@@ -238,6 +239,23 @@ async def mima_scan_logs(
     return await run_json_script("scan_logs", _paths(paths, "paths") + ["--max-hits", str(max_hits)])
 
 
+@_tool("mima_resume", "Pick up a run in a new session")
+async def mima_resume(
+    folder: Annotated[Optional[str], Field(description="Absolute path of the run folder (the run_dir used at submission). If the folder holds no run, runs below it are listed, newest first. Leave out to look under the allowed folders.", max_length=1024)] = None,
+) -> dict:
+    """Read-only. Use it first when the person says they are back, asks about a run from an earlier session, or asks whether their jobs finished.
+
+    Reads the run ledger (mima_run_state.json) and asks PBS for the live state of the last submitted stage, scans its logs and
+    checks its outputs when the ledger names them. Returns status in_progress, complete, failed, unresolved (PBS no longer knows a
+    job and no stage report recorded it: decide from the logs and outputs, not from time passed), no_jobs, choose_run (several runs
+    found: ask the person which) or not_found. data.next says what to do. The ledger is memory, not truth: PBS is asked every time.
+    This tool never submits or runs anything; the next stage still needs the person's approval."""
+    args = ["resume"]
+    if folder:
+        args += ["--run-dir", check_path(folder, "folder")]
+    return await run_json_script("run_state", args, timeout=90)
+
+
 @_tool("mima_check_report", "Check an analysis report")
 async def mima_check_report(
     report_path: AbsPath,
@@ -405,6 +423,10 @@ async def mima_write_pbs_header(
         cpus=cpus, reads_dir=reads_dir, num_pbs_jobs=num_pbs_jobs, out_file=out_file)) + ["--apply"])
 
 
+EMAIL = re.compile(r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,120}\.[A-Za-z]{2,}$")
+CHECK_STAGES = Literal["qc", "taxa", "taxa-tables", "func", "func-tables", "vis-barplot", "diversity", "classifier"]
+
+
 @_tool("mima_prepare_submission", "Prepare a job submission (does not submit)", WRITES_PLAN)
 async def mima_prepare_submission(
     jobs: Annotated[list[dict], Field(description='[{"id": "qc0", "script": "/abs/qcModule_0.pbs", "after": ["other_id"], "after_job_ids": ["1234.server"]}]; id is a short unique name, after lists earlier ids in this plan', min_length=1, max_length=200)],
@@ -412,15 +434,30 @@ async def mima_prepare_submission(
     check_fs: Annotated[bool, Field(description="Verify that paths in the scripts exist (use on the cluster)")] = True,
     project: Annotated[Optional[str], Field(description="qsub -P project code, if the site needs it")] = None,
     queue: Annotated[Optional[str], Field(description="qsub -q queue name")] = None,
+    stage: Annotated[Optional[CHECK_STAGES], Field(description="The stage these jobs run; kept in the run ledger so a later session knows what this run was")] = None,
+    output_dir: Annotated[Optional[str], Field(description="Absolute folder where the stage's outputs will appear (for example the QC_module folder); a later session checks it. Needs stage.")] = None,
+    manifest: Annotated[Optional[str], Field(description="Absolute path of manifest.csv, used by the output check")] = None,
+    choices: Annotated[Optional[dict[str, str]], Field(description='The person\'s choices for this stage, as short text, for example {"database": "...", "threshold": "100"}', max_length=20)] = None,
+    mail_to: Annotated[Optional[str], Field(description="The person's email address for job notices. Ask once; leave out if they decline.")] = None,
+    expected_minutes: Annotated[Optional[int], Field(description="Rough run time in minutes, if known, so a later session can say what to expect", ge=1, le=100000)] = None,
+    stage_report: Annotated[bool, Field(description="Add the small follow-up job that reports on the stage when all its jobs have ended. Leave on.")] = True,
+    report_queue: Annotated[str, Field(description="Queue for the follow-up job; it needs 1 CPU and 2 GB, so not a large-memory queue")] = "normal",
 ) -> dict:
     """Validate scripts and prepare a submission. THIS DOES NOT SUBMIT ANYTHING.
 
     Writes submission_plan.json in run_dir, runs submit_jobs.py as a dry run and returns the exact command (run_yourself),
     with its confirmation token, that a person must run in their own terminal and confirm by typing. Show the user the
-    qsub commands and that command. Returns status dry_run_ok, invalid (scripts failed validation) or bad_plan."""
+    qsub commands and that command. Unless stage_report is false it also writes a small follow-up job script (1 CPU, 10 minutes)
+    that PBS starts after every job here has ended, whatever the outcome; it only reports and never submits anything.
+    With mail_to, PBS emails the person if a job is aborted and the follow-up job emails when the stage has ended.
+    Returns status dry_run_ok, invalid (scripts failed validation) or bad_plan."""
     run = Path(check_path(run_dir, "run_dir"))
     if not run.is_dir():
         raise ToolError(f"run_dir does not exist: {run_dir}. Create it first.")
+    if mail_to is not None and not EMAIL.match(mail_to):
+        raise ToolError("mail_to is not a valid email address")
+    if output_dir and not stage:
+        raise ToolError("output_dir needs stage")
     clean, seen = [], set()
     for j in jobs:
         extra = set(j) - {"id", "script", "after", "after_job_ids", "cwd"}
@@ -441,8 +478,34 @@ async def mima_prepare_submission(
         if j.get("cwd"):
             item["cwd"] = check_path(j["cwd"], "cwd")
         clean.append(item)
+    batch = "%s-%s" % (stage or "run", time.strftime("%Y%m%d-%H%M%S"))
+    plan_doc = {"batch": batch, "jobs": clean}
+    if stage:
+        plan_doc["stage"] = stage
+    if mail_to:
+        plan_doc["mail_to"] = mail_to
+    if choices:
+        plan_doc["choices"] = {check_token(k, "choices key"): str(v)[:200] for k, v in choices.items()}
+    if expected_minutes:
+        plan_doc["expected_minutes"] = expected_minutes
+    if stage and output_dir:
+        plan_doc["check"] = {"stage": stage, "dir": check_path(output_dir, "output_dir"), "manifest": check_path(manifest, "manifest") if manifest else None}
+    report_note = None
+    if stage_report:
+        rep_script = run / ("stage_report_%s.pbs" % batch)
+        w = await run_script("stage_report", ["write-job", "--run-dir", str(run), "--batch", batch, "--like", clean[0]["script"], "--out", str(rep_script)])
+        if w["status"] != "written":
+            raise ToolError("could not write the stage-report job script: " + (w.get("stderr") or w.get("output") or "")[:300])
+        rid = "stage_report"
+        n = 1
+        while rid in seen:
+            n += 1
+            rid = "stage_report_%d" % n
+        plan_doc["jobs"] = clean + [{"id": rid, "script": str(rep_script), "role": "report", "queue": check_token(report_queue, "report_queue"),
+                                     "after_any": [c["id"] for c in clean], "cwd": str(run)}]
+        report_note = "A follow-up job (%s) is included: it starts after every job here has ended, whatever the outcome, and only reports." % rid
     plan, record = run / "submission_plan.json", run / "submission_record.json"
-    plan.write_text(json.dumps({"jobs": clean}, indent=2) + "\n")
+    plan.write_text(json.dumps(plan_doc, indent=2) + "\n")
     extra_args = []
     for flag, val in (("--project", project), ("--queue", queue)):
         if val:
@@ -451,6 +514,8 @@ async def mima_prepare_submission(
     m = re.search(r"Confirmation token: ([0-9a-f]+)", dry["output"])
     dry["plan_file"] = str(plan)
     dry["submitted"] = False
+    if report_note:
+        dry["stage_report"] = report_note
     if dry["status"] == "dry_run_ok" and m:
         cmd = ["python3", str(scripts_dir() / "submit_jobs.py"), str(plan), "--execute", "--confirm", m.group(1),
                "--record", str(record)] + extra_args
@@ -539,7 +604,8 @@ async def mima_submit_jobs(
         out.update(status="stale", note="The plan or the scripts changed since the token was issued. Nothing was submitted. "
                    "Run mima_prepare_submission again and have the person review it.")
         return out
-    jobs = json.loads(plan.read_text()).get("jobs", [])
+    plan_doc = json.loads(plan.read_text())
+    jobs = plan_doc.get("jobs", [])
     if len(jobs) > _max_jobs():
         out.update(status="too_many_jobs", note=f"{len(jobs)} jobs is above this server's limit of {_max_jobs()}. Nothing was submitted.")
         return out
@@ -547,7 +613,9 @@ async def mima_submit_jobs(
     cancel_choice = "Do NOT submit"
     where = " ".join(a for a in (f"project {project}" if project else "", f"queue {queue}" if queue else "") if a)
     message = (f"APPROVAL NEEDED. Submit {len(jobs)} job(s) to the cluster queue? {where}".rstrip() + "\n"
-               + "\n".join(f"  {j['id']}: {j['script']}\n      {_pbs_summary(j['script'])}" for j in jobs)
+               + "\n".join(f"  {j['id']}{' (follow-up report job: reports only, runs after the others end)' if j.get('role') == 'report' else ''}: "
+                           f"{j['script']}\n      {_pbs_summary(j['script'])}" for j in jobs)
+               + (f"\nEmail notices go to {plan_doc['mail_to']}." if plan_doc.get("mail_to") else "")
                + "\nChoose '" + submit_choice + "' only if you have reviewed these jobs.")
     verdict = await _ask_person(ctx, message, submit_choice, cancel_choice)
     if verdict == "unavailable":
