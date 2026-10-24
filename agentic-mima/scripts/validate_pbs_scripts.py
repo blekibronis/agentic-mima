@@ -88,6 +88,9 @@ def validate_file(path, check_fs=False, module=None):
         gb = mem_gb(mem.group(1).split(":")[0])
         if gb is not None and gb < MIN_TAXA_MEM_GB:
             warns.append(f"Memory {mem.group(1)} is below ~{MIN_TAXA_MEM_GB}GB needed by Kraken2; the job may be killed.")
+    cpu_counts = sorted(set(re.findall(r"ncpus=(\d+)", pbs)), key=int)
+    if len(cpu_counts) > 1:
+        warns.append("The #PBS lines ask for different CPU counts (%s). PBS uses only one of them: check which, and that the tools in the script are told the same number." % ", ".join(cpu_counts))
     if not re.search(r"^#PBS\s+-j\s+oe", pbs, re.M):
         warns.append("No '#PBS -j oe': logs will be split into separate output and error files.")
 
