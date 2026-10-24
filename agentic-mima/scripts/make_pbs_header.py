@@ -252,6 +252,7 @@ def main():
                          "ask the user which high-memory queue to use (a previous real taxonomy run on Gadi used -q hugemem)." % MEM_GB)
         if home:
             warns.append("Folders under your home directory need no storage entry and are available in the container by default.")
+        warns.append("The generator's -t (threads) is set to %d by the command builder when this header is passed as --pbs-config, so the tools and PBS use the same number." % cpus)
         warns.append("The walltime and memory are estimates, not measured values. Check the queue's limits, and compare the request with "
                      "'Walltime Used' and 'Memory Used' in the job log after the first real run.")
         with tempfile.NamedTemporaryFile("w", suffix=".cfg", delete=False) as tf:

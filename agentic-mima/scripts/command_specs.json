@@ -77,10 +77,11 @@
         "-t": {
           "type": "int",
           "min": 1,
-          "help": "PBS threads (--help default 8)."
+          "help": "PBS threads (--help default 8).",
+          "match_header_ncpus": "--pbs-config"
         }
       },
-      "notes": "Generates one bash script per sample plus PBS scripts; nothing is analysed until the PBS scripts are submitted. Must finish before taxonomy or function profiling. Container code (mima4_v2.0.0): fastp runs with its default settings (no thresholds are passed); host removal is 'minimap2 -c REF R1 R2' with no preset (no -x sr), and reads named in the alignment are removed, so short reads may be matched less sensitively and some host reads can remain. --ref is listed as optional by --help but is required here, because without it no host reads are removed; the file extension is not checked. Samples per job = ceil(samples / --num-pbs-jobs), so fewer PBS scripts than requested can result (9 samples, 4 jobs gives 3 scripts). --help default for --mode is container (the tutorial says single). -w/-M/-t set the walltime (hours), memory (GB) and threads written for the PBS jobs; how they combine with the header in --pbs-config has not been checked, so prefer to set resources in the --pbs-config file and leave these unset."
+      "notes": "Generates one bash script per sample plus PBS scripts; nothing is analysed until the PBS scripts are submitted. Must finish before taxonomy or function profiling. Container code (mima4_v2.0.0): fastp runs with its default settings (no thresholds are passed); host removal is 'minimap2 -c REF R1 R2' with no preset (no -x sr), and reads named in the alignment are removed, so short reads may be matched less sensitively and some host reads can remain. --ref is listed as optional by --help but is required here, because without it no host reads are removed; the file extension is not checked. Samples per job = ceil(samples / --num-pbs-jobs), so fewer PBS scripts than requested can result (9 samples, 4 jobs gives 3 scripts). --help default for --mode is container (the tutorial says single). -w/-M/-t set the walltime (hours), memory (GB) and threads written for the PBS jobs. How -w and -M combine with the header in --pbs-config has not been checked, so set walltime and memory in the --pbs-config file and leave them unset. The builder sets -t to the header's ncpus itself, so the generator and PBS use the same number; an explicit -t that differs from the header is an error."
     },
     "mima-qc-report": {
       "stage": "qc-report",
@@ -203,7 +204,8 @@
         "-t": {
           "type": "int",
           "min": 1,
-          "help": "PBS threads (--help default 28)."
+          "help": "PBS threads (--help default 28).",
+          "match_header_ncpus": "--pbs-config"
         },
         "--taxon-profiler": {
           "type": "choice",
@@ -221,7 +223,7 @@
           "help": "Input file type (default fastq)."
         }
       },
-      "notes": "Kraken2 needs about 300GB memory, so one PBS script runs samples sequentially. Kraken2 and Bracken databases must share one directory. The tutorial example uses --threshold 100 while the default is 1000: always state which value is used. The generator lists the samples in the CleanReads folder once, when it runs: samples added later are ignored until it is run again, and a wrong --fwd-suffix/--rev-suffix exits 0 and writes an empty PBS script with no per-sample .sh files (validate_pbs_scripts.py --check-fs reports this). Verified on Gadi: --read-length maps to Bracken -r and --threshold to Bracken -t. --help defaults: walltime 48 h, memory 320 GB, 28 threads; --threshold default 1000 (taxa below it are removed); --read-length has no stated default (the tutorial says 150). On the Gadi GTDB r95 database only 50, 100 and 150 have k-mer files (75 fails). -w/-M/-t set the walltime (hours), memory (GB) and threads written for the PBS jobs; how they combine with the header in --pbs-config has not been checked, so prefer to set resources in the --pbs-config file and leave these unset."
+      "notes": "Kraken2 needs about 300GB memory, so one PBS script runs samples sequentially. Kraken2 and Bracken databases must share one directory. The tutorial example uses --threshold 100 while the default is 1000: always state which value is used. The generator lists the samples in the CleanReads folder once, when it runs: samples added later are ignored until it is run again, and a wrong --fwd-suffix/--rev-suffix exits 0 and writes an empty PBS script with no per-sample .sh files (validate_pbs_scripts.py --check-fs reports this). Verified on Gadi: --read-length maps to Bracken -r and --threshold to Bracken -t. --help defaults: walltime 48 h, memory 320 GB, 28 threads; --threshold default 1000 (taxa below it are removed); --read-length has no stated default (the tutorial says 150). On the Gadi GTDB r95 database only 50, 100 and 150 have k-mer files (75 fails). -w/-M/-t set the walltime (hours), memory (GB) and threads written for the PBS jobs. How -w and -M combine with the header in --pbs-config has not been checked, so set walltime and memory in the --pbs-config file and leave them unset. The builder sets -t to the header's ncpus itself, so the generator and PBS use the same number; an explicit -t that differs from the header is an error."
     },
     "mima-bracken-report": {
       "stage": "taxa-report",
@@ -338,7 +340,8 @@
         "-t": {
           "type": "int",
           "min": 1,
-          "help": "PBS threads (--help default 28)."
+          "help": "PBS threads (--help default 28).",
+          "match_header_ncpus": "--pbs-config"
         },
         "--function-profiler": {
           "type": "choice",
@@ -367,7 +370,7 @@
           "help": "Directory of the pipeline scripts, used to find combine_fastq.jl."
         }
       },
-      "notes": "Generates one PBS script per sample (HUMAnN3; the tutorial example asks for 8 CPUs, 64 GB and 8 h, --help defaults are 24 h, 64 GB, 28 threads). Forward and reverse reads are concatenated into SAMPLE_combine.fq.gz first, so HUMAnN sees them as one set of reads. The container has MetaPhlAn 4.1.0 (default database vJun23); the tutorial example uses vJan21 with ++index, and --mpa3 exists for MetaPhlAn 3 databases. The feature-table step (generate_func_feature_tables.pbs/.sh, written by func_profiling.py) is a PBS job for the later submission phase; it regroups the cpm gene-family table to KOs with humann_regroup_table -g uniref90_rxn -c UTILITY/map_ko_uniref90.txt.gz, and the 'cmp' in some output names is a spelling slip for cpm. Whether -c overrides -g is untested: check that KO rows start with K numbers. -w/-M/-t set the walltime (hours), memory (GB) and threads written for the PBS jobs; how they combine with the header in --pbs-config has not been checked, so prefer to set resources in the --pbs-config file and leave these unset."
+      "notes": "Generates one PBS script per sample (HUMAnN3; the tutorial example asks for 8 CPUs, 64 GB and 8 h, --help defaults are 24 h, 64 GB, 28 threads). Forward and reverse reads are concatenated into SAMPLE_combine.fq.gz first, so HUMAnN sees them as one set of reads. The container has MetaPhlAn 4.1.0 (default database vJun23); the tutorial example uses vJan21 with ++index, and --mpa3 exists for MetaPhlAn 3 databases. The feature-table step (generate_func_feature_tables.pbs/.sh, written by func_profiling.py) is a PBS job for the later submission phase; it regroups the cpm gene-family table to KOs with humann_regroup_table -g uniref90_rxn -c UTILITY/map_ko_uniref90.txt.gz, and the 'cmp' in some output names is a spelling slip for cpm. Whether -c overrides -g is untested: check that KO rows start with K numbers. -w/-M/-t set the walltime (hours), memory (GB) and threads written for the PBS jobs. How -w and -M combine with the header in --pbs-config has not been checked, so set walltime and memory in the --pbs-config file and leave them unset. The builder sets -t to the header's ncpus itself, so the generator and PBS use the same number; an explicit -t that differs from the header is an error."
     },
     "mima-vis-taxa": {
       "stage": "vis-barplot",

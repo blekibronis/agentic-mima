@@ -169,6 +169,44 @@ def check_value(label, ps, value, check_fs, errors, warns):
     return None
 
 
+HEADER_NCPUS = re.compile(r"^\s*#PBS\s+-l\s+[^\n]*?ncpus=(\d+)", re.M)
+
+
+def match_header_threads(spec, rendered, errors, warns):
+    """Make the generator's thread option equal to the CPUs the PBS header asks for.
+
+    The generator (-t) and PBS (ncpus in the header file) each state a CPU count. If they differ, the tools are told to use more
+    threads than PBS provides (slow) or fewer (idle CPUs that are still paid for). So -t is taken from the header; an explicit -t
+    that disagrees is an error, never silently changed."""
+    for name, ps in spec["params"].items():
+        src = ps.get("match_header_ncpus")
+        if not src or src not in rendered:
+            continue
+        try:
+            text = Path(rendered[src]).read_text(errors="replace")
+        except OSError:
+            warns.append(f"{name}: could not read {rendered[src]}, so {name} was not matched to the header's ncpus. The generator's own default for {name} applies "
+                         f"and may differ from the header. Check one generated script before submitting.")
+            continue
+        found = sorted({int(n) for n in HEADER_NCPUS.findall(text)})
+        if not found:
+            warns.append(f"{src}: no '#PBS -l ncpus=N' line was found, so {name} was not matched to it. Validate the header (validate_pbs_config.py).")
+        elif len(found) > 1:
+            errors.append(f"{src}: asks for different CPU counts ({', '.join(map(str, found))}). Keep one ncpus value in the header.")
+        elif name in rendered:
+            try:
+                same = int(str(rendered[name]).strip()) == found[0]
+            except ValueError:
+                same = False
+            if not same:
+                errors.append(f"{name}: {rendered[name]} does not match ncpus={found[0]} in {src}. The generator and PBS must use the same number. "
+                              f"Leave {name} out and it is set to {found[0]} for you, or change the header.")
+        else:
+            rendered[name] = found[0]
+            warns.append(f"{name}: set to {found[0]} to match ncpus={found[0]} in {src}, so the tools use the CPUs PBS provides "
+                         f"(the generator's own default would otherwise apply).")
+
+
 def matches(params, cond):
     return all(str(params.get(k)) == v for k, v in cond.items())
 
@@ -239,6 +277,8 @@ def build_step(step, specs, check_fs):
         rule = ps.get("requires_file_in")
         if rule:
             check_required_file(name, ps, rule, rendered, params, spec, check_fs, errors, warns)
+
+    match_header_threads(spec, rendered, errors, warns)
 
     for name, ps in spec["params"].items():
         if ps.get("approved_list") and isinstance(rendered.get(name), str):

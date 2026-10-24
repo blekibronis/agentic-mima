@@ -1446,6 +1446,71 @@ class TestHelpComparator(unittest.TestCase):
         self.assertIn("does not exist", r.stderr)
 
 
+class TestThreadsMatchHeader(unittest.TestCase):
+    """The generator's -t and the header's ncpus are always the same number (build_command, make_pbs_header, validate_pbs_scripts)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def header(self, ncpus_line="#PBS -l ncpus=2", name="h.cfg"):
+        return write(self.tmp / name, f"#!/bin/bash\n#PBS -N a\n{ncpus_line}\n#PBS -l walltime=1:00:00\n#PBS -l mem=100GB\n#PBS -j oe\nIMAGE_DIR=/opt/m\nexport APPTAINER_BIND=\"/d:/d\"\n")
+
+    def qc(self, cfg, **over):
+        p = {"-i": "/w/raw", "-o": "/w/out", "-m": "/w/m.csv", "--ref": "/db/g.fna", "--mode": "container", "--pbs-config": str(cfg)}
+        p.update(over); return {"module": "mima-qc", "params": p}
+
+    def build(self, plan):
+        return run("build_command.py", write(self.tmp / "plan.json", json.dumps(plan)))
+
+    def test_t_is_taken_from_the_header_when_not_given(self):
+        rc, out = self.build(self.qc(self.header("#PBS -l ncpus=2")))
+        self.assertEqual(rc, 0, out); self.assertIn("-t 2", out); self.assertIn("set to 2 to match ncpus=2", out)
+
+    def test_a_matching_explicit_t_is_fine_and_a_different_one_is_an_error(self):
+        h = self.header("#PBS -l ncpus=2")
+        rc, out = self.build(self.qc(h, **{"-t": 2})); self.assertEqual(rc, 0, out); self.assertIn("-t 2", out); self.assertNotIn("set to 2", out)
+        rc, out = self.build(self.qc(h, **{"-t": 8}))
+        self.assertEqual(rc, 1, out); self.assertIn("-t: 8 does not match ncpus=2", out); self.assertNotIn("apptainer run", out)
+
+    def test_select_syntax_and_every_module_with_a_thread_option(self):
+        rc, out = self.build(self.qc(self.header("#PBS -l select=1:ncpus=4:mem=64gb", "sel.cfg"))); self.assertIn("-t 4", out, out)
+        h = self.header("#PBS -l ncpus=16", "t.cfg")
+        rc, out = self.build({"module": "mima-taxa-profiling", "params": {"-i": "/a", "-o": "/b", "--reference-path": "/c", "--mode": "container", "--pbs-config": str(h)}})
+        self.assertEqual(rc, 0, out); self.assertIn("-t 16", out)
+        rc, out = self.build({"module": "mima-function-profiling", "params": {"-i": "/w/c", "-o": "/w/o", "--nucleotide-database": "/d/c", "--protein-database": "/d/u",
+                              "--utility-database": "/d/m", "--metaphlan-options": "++bowtie2db /d/mp", "--mode": "container", "--pbs-config": str(h), "-t": 28}})
+        self.assertEqual(rc, 1, out); self.assertIn("-t: 28 does not match ncpus=16", out)
+
+    def test_an_unreadable_or_odd_header_never_invents_a_value(self):
+        rc, out = self.build(self.qc(self.tmp / "missing.cfg"))
+        self.assertEqual(rc, 0, out); self.assertNotIn(" -t ", out.split("WARN")[0] if "WARN" in out else out); self.assertIn("could not read", out)
+        rc, out = self.build(self.qc(write(self.tmp / "none.cfg", "#!/bin/bash\n#PBS -N a\n")))
+        self.assertEqual(rc, 0, out); self.assertIn("no '#PBS -l ncpus=N' line was found", out)
+        rc, out = self.build(self.qc(write(self.tmp / "two.cfg", "#PBS -l ncpus=2\n#PBS -l ncpus=8\n")))
+        self.assertEqual(rc, 1, out); self.assertIn("different CPU counts (2, 8)", out)
+
+    def test_a_header_written_by_the_header_tool_and_the_builder_agree(self):
+        reads = self.tmp / "reads"; reads.mkdir(exist_ok=True)
+        for n in ("A", "B"):
+            for end in (1, 2):
+                (reads / f"{n}_{end}.fq.gz").write_bytes(b"x")
+        m = write(self.tmp / "manifest.csv", "Sample_ID,FileID_R1,FileID_R2\nA,A_1.fq.gz,A_2.fq.gz\nB,B_1.fq.gz,B_2.fq.gz\n")
+        out = self.tmp / "made.cfg"
+        rc, text = run("make_pbs_header.py", "--module", "qc", "--manifest", m, "--reads-dir", reads, "--image", "/g/data/ab01/m.sif", "--project", "ab01",
+                       "--path", "/scratch/ab01/run", "--cpus", 2, "--apply", "--out", out, "--format", "json")
+        self.assertEqual(rc, 0, text); self.assertIn("ncpus=2", out.read_text()); self.assertIn("-t (threads) is set to 2", text)
+        rc, built = self.build(self.qc(out)); self.assertEqual(rc, 0, built); self.assertIn("-t 2", built)
+
+    def test_generated_scripts_with_conflicting_cpu_counts_are_flagged(self):
+        s = write(self.tmp / "qcModule_9.pbs", "#!/bin/bash\n#PBS -N a\n#PBS -l ncpus=2\n#PBS -l ncpus=8\n#PBS -l walltime=1:00:00\n#PBS -l mem=8GB\n#PBS -j oe\nIMAGE_DIR=/opt/m\nexport APPTAINER_BIND=\"/d:/d\"\n")
+        rc, out = run("validate_pbs_scripts.py", s); self.assertIn("different CPU counts (2, 8)", out)
+        rc, out = run("validate_pbs_scripts.py", self.tmp / "qcModule_9.pbs"); self.assertNotIn("ERROR", out)
+
+
 class TestRunLedgerAndResume(unittest.TestCase):
     """The run ledger, the follow-up stage-report job, and picking a run up again in a new session (run_state.py, stage_report.py)."""
     @classmethod
