@@ -1655,6 +1655,39 @@ class TestRunLedgerAndResume(unittest.TestCase):
         rc, out = run("stage_report.py", "run", "--run-dir", self.work, "--batch", "qc-1", env=env); self.assertEqual(rc, 0, out)
         self.assertIn("no mail command", json.loads((self.work / "STAGE_REPORT_qc-1.json").read_text())["mail"]["note"])
 
+    def _mail_case(self, script, wait="2"):
+        """Run the report with a fake `mail` that misbehaves like Gadi's did (a helper left holding the pipes, or no return at all)."""
+        import time
+        fake = self.tmp / ("mailbin_" + str(abs(hash(script)) % 10**6)); fake.mkdir(exist_ok=True)
+        m = fake / "mail"; m.write_text(script); m.chmod(0o755)
+        self.make_plan(mail="rafael@example.org"); self.submit(); self.set_jobs(**{"1001.pbssrv": ("F", 0), "1002.pbssrv": ("F", 0)})
+        t0 = time.time()
+        rc, out = run("stage_report.py", "run", "--run-dir", self.work, "--batch", "qc-1",
+                      env=dict(self.cl.env(), PATH=f"{fake}:" + self.cl.env()["PATH"], MIMA_MAIL_WAIT=wait))
+        return rc, out, time.time() - t0
+
+    def test_a_mail_command_that_never_returns_cannot_hang_the_report_job(self):
+        """Regression: on Gadi the first report job used no CPU for 10 minutes and was killed at its walltime, because mail never returned."""
+        rc, out, took = self._mail_case("#!/bin/sh\ncat > /dev/null\nexec sleep 120\n")
+        self.assertEqual(rc, 0, out); self.assertLess(took, 20, "the report job waited on mail")
+        rep = json.loads((self.work / "STAGE_REPORT_qc-1.json").read_text())
+        self.assertIsNone(rep["mail"]["sent"]); self.assertIn("did not return", rep["mail"]["note"])
+        self.assertEqual(rep["overall"], "COMPLETE"); self.assertTrue((self.work / "STAGE_REPORT_qc-1.md").is_file())
+        led = json.loads(self.ledger.read_text()); self.assertEqual(led["stages"][0]["report"]["overall"], "COMPLETE")
+        self.assertIn("did not return", led["stages"][0]["report"]["mail"]["note"])
+
+    def test_a_mail_command_that_leaves_a_helper_holding_the_pipes_cannot_hang_it_either(self):
+        rc, out, took = self._mail_case("#!/bin/sh\ncat > /dev/null\n(sleep 120) &\nexit 0\n", wait="5")
+        self.assertEqual(rc, 0, out); self.assertLess(took, 20, "the report job waited on mail's helper process")
+        self.assertTrue(json.loads((self.work / "STAGE_REPORT_qc-1.json").read_text())["mail"]["sent"])
+
+    def test_the_report_files_exist_before_mail_is_tried(self):
+        """If the mail command dies badly the report must already be on disk."""
+        rc, out, took = self._mail_case("#!/bin/sh\ncat > /dev/null\nexit 3\n")
+        self.assertEqual(rc, 0, out)
+        rep = json.loads((self.work / "STAGE_REPORT_qc-1.json").read_text())
+        self.assertEqual((rep["mail"]["sent"], rep["overall"]), (False, "COMPLETE")); self.assertIn("status 3", rep["mail"]["note"])
+
     def test_stage_report_works_from_the_record_when_the_ledger_is_gone(self):
         self.make_plan(); self.submit(); self.ledger.unlink(); self.set_jobs(**{"1001.pbssrv": ("F", 0), "1002.pbssrv": ("F", 0)})
         rc, out = run("stage_report.py", "run", "--run-dir", self.work, "--batch", "qc-1", env=self.cl.env()); self.assertEqual(rc, 0, out)

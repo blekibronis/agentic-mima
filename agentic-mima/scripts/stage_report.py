@@ -18,7 +18,9 @@ node. It uses no model and changes no pipeline file.
 """
 import argparse
 import json
+import os
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -90,7 +92,17 @@ def one_line(batch, stage, overall, counts, out_ok):
         stage or "unknown", batch, word, ", ".join("%d %s" % (n, s.lower()) for s, n in sorted(counts.items())), extra)
 
 
-def send_mail(address, subject, body):
+MAIL_WAIT = 20   # seconds to wait for the mail command
+
+
+def send_mail(address, subject, body, wait=None):
+    """Hand the notice to the node's mail command, and never wait on it for long.
+
+    On Gadi the mail command can keep running after it has taken the message (it leaves a helper behind). With
+    pipes attached, Python 3.6's subprocess.run waits for that helper forever, even after its own timeout: the first
+    run of this job on Gadi sat idle until PBS killed it at the walltime. So no pipes are attached to the output,
+    the command runs in its own process group, and the group is killed if it has not returned in `wait` seconds."""
+    wait = wait if wait is not None else int(os.environ.get("MIMA_MAIL_WAIT", MAIL_WAIT))
     exe = shutil.which("mail") or shutil.which("mailx")
     if not address:
         return {"attempted": False, "note": "no email address was given at submission"}
@@ -99,11 +111,28 @@ def send_mail(address, subject, body):
     if not exe:
         return {"attempted": False, "note": "no mail command on this node; PBS end-of-job mail still applies"}
     try:
-        cp = subprocess.run([exe, "-s", subject, address], input=body, universal_newlines=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        p = subprocess.Popen([exe, "-s", subject, address], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, universal_newlines=True, start_new_session=True)
+    except OSError as exc:
         return {"attempted": True, "sent": False, "note": str(exc)[:200]}
-    return {"attempted": True, "sent": cp.returncode == 0, "note": (cp.stderr or "").strip()[:200]}
+    try:
+        p.stdin.write(body)
+        p.stdin.close()
+    except (OSError, ValueError):
+        pass
+    try:
+        rc = p.wait(timeout=wait)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        return {"attempted": True, "sent": None, "note": "the mail command did not return within %d seconds; it was stopped and delivery is not confirmed" % wait}
+    return {"attempted": True, "sent": rc == 0, "note": "" if rc == 0 else "mail command exited with status %d" % rc}
 
 
 def run(args):
@@ -143,7 +172,8 @@ def run(args):
               "rows": rows, "log_findings": findings, "outputs": outputs, "notice": line}
     jf, mf = run_dir / ("STAGE_REPORT_%s.json" % args.batch), run_dir / ("STAGE_REPORT_%s.md" % args.batch)
     mail_to = (stage or {}).get("mail_to")
-    report["mail"] = send_mail(mail_to, "MIMA stage %s: %s" % (stage_name or args.batch, overall), line + "\n\nRun folder: %s\n" % run_dir)
+    # The files and the ledger come first; the email goes last, so a mail command that misbehaves cannot cost the report.
+    report["mail"] = {"attempted": False, "note": "not sent yet"}
     jf.write_text(json.dumps(report, indent=2) + "\n")
     md = ["# Stage report: %s (%s)" % (stage_name or "unknown", args.batch), "", "Written %s." % report["written_at"], "", "**%s**" % line, ""]
     md += ["| job | PBS id | state | walltime | memory |", "|---|---|---|---|---|"]
@@ -157,18 +187,29 @@ def run(args):
     mf.write_text("\n".join(md) + "\n")
 
     # Record it in the ledger. Another session may be writing at the same moment, so wait for the lock briefly.
-    if ledger is not None and stage is not None:
+    def record(mail_only=False):
+        if ledger is None or stage is None:
+            return
         try:
             with run_state.lock(run_dir, wait=30):
-                ledger = run_state.load(run_dir) or ledger
-                st = run_state.find_stage(ledger, args.batch)
-                if st is not None:
+                led = run_state.load(run_dir) or ledger
+                st = run_state.find_stage(led, args.batch)
+                if st is None:
+                    return
+                if mail_only:
+                    st.setdefault("report", {})["mail"] = report["mail"]
+                else:
                     st["report"] = {"written_at": report["written_at"], "overall": overall, "counts": counts, "rows": rows,
                                     "file": str(jf), "mail": report["mail"]}
-                    run_state.add_event(ledger, "stage_report", line)
-                    run_state.save(run_dir, ledger)
+                    run_state.add_event(led, "stage_report", line)
+                run_state.save(run_dir, led)
         except run_state.LedgerBusy:
             print("Ledger was busy; the report files were written but the ledger was not updated.", file=sys.stderr)
+
+    record()
+    report["mail"] = send_mail(mail_to, "MIMA stage %s: %s" % (stage_name or args.batch, overall), line + "\n\nRun folder: %s\n" % run_dir)
+    jf.write_text(json.dumps(report, indent=2) + "\n")
+    record(mail_only=True)
     print(line)
     return 0
 
