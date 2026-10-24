@@ -31,7 +31,7 @@ RANKS = {"class": "classes", "family": "families", "genus": "genuses", "order": 
 
 
 def run(script, *args, env=None, cwd=None, stdin=subprocess.DEVNULL):
-    p = subprocess.run([PY, str(SC / script), *map(str, args)], capture_output=True, text=True, env=env, cwd=cwd, stdin=stdin)
+    p = subprocess.run([PY, str(SC / script), *map(str, args)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, env=env, cwd=cwd, stdin=stdin)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -1209,12 +1209,13 @@ class TestSkillConsistency(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp())
         try:
             shutil.copytree(SKILL, tmp / "s"); (tmp / "s/references/module-parameters.md").unlink()
-            subprocess.run([PY, str(tmp / "s/scripts/generate_module_docs.py")], check=True, capture_output=True)
+            subprocess.run([PY, str(tmp / "s/scripts/generate_module_docs.py")], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.assertEqual((tmp / "s/references/module-parameters.md").read_text(), (SKILL / "references/module-parameters.md").read_text(),
                              "module-parameters.md is out of date: run scripts/generate_module_docs.py")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    @unittest.skipIf(sys.version_info < (3, 8), "needs ast.parse(feature_version); on Python 3.6 the interpreter parsing every script is itself the check")
     def test_scripts_use_only_standard_library_and_python36_syntax(self):
         """Gadi's default python3 is 3.6.8 (seen 2026-10-14), so the scripts must run there.
 
@@ -1418,7 +1419,7 @@ class TestHelpComparator(unittest.TestCase):
             loaded = self.c.load_help(str(d))
             self.assertEqual(set(loaded), set(self.helps))
             rc = subprocess.run([PY, str(HERE / "container_check" / "compare_help_to_spec.py"), str(d), "--spec", str(SC / "command_specs.json")],
-                                capture_output=True, text=True).returncode
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True).returncode
             self.assertEqual(rc, 0)
         finally:
             shutil.rmtree(d, ignore_errors=True)
@@ -1430,18 +1431,18 @@ class TestHelpComparator(unittest.TestCase):
             bad["modules"]["mima-qc"]["params"]["--nonexistent"] = {"type": "int"}
             spec_path = d / "bad_spec.json"; spec_path.write_text(json.dumps(bad))
             r = subprocess.run([PY, str(HERE / "container_check" / "compare_help_to_spec.py"), str(self.FIXTURE), "--spec", str(spec_path)],
-                               capture_output=True, text=True)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             self.assertEqual(r.returncode, 1)
             self.assertIn("--nonexistent", r.stdout)
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
     def test_unreadable_input_exits_two(self):
-        r = subprocess.run([PY, str(HERE / "container_check" / "compare_help_to_spec.py"), "/no/such/path.txt"], capture_output=True, text=True)
+        r = subprocess.run([PY, str(HERE / "container_check" / "compare_help_to_spec.py"), "/no/such/path.txt"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(r.returncode, 2)
 
     def test_capture_script_refuses_missing_image(self):
-        r = subprocess.run(["bash", str(HERE / "container_check" / "capture_container_help.sh"), "/no/such.sif"], capture_output=True, text=True)
+        r = subprocess.run(["bash", str(HERE / "container_check" / "capture_container_help.sh"), "/no/such.sif"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         self.assertEqual(r.returncode, 2)
         self.assertIn("does not exist", r.stderr)
 
